@@ -8,44 +8,45 @@ import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// production: dist/http/routes/admin/index.js -> dist/ui (3 levels up)
+const PROD_UI_PATH = path.resolve(__dirname, '../../../ui');
+// dev/test: src/http/routes/admin/index.ts -> ui (4 levels up)
+const DEV_UI_PATH = path.resolve(__dirname, '../../../../ui');
+
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  // Resolve the static files path.
-  // In production, files are compiled to dist/http/routes/admin/index.js, assets in dist/ui.
-  // In tests, files are executed directly from src/http/routes/admin/index.ts, assets might not be built yet.
-  const pathsToTry = [
-    path.resolve(__dirname, '../../../ui'), // production: dist/ui (3 levels up from dist/http/routes/admin)
-    path.resolve(__dirname, '../../../../ui'), // dev source: ui (4 levels up from src/http/routes/admin)
-  ];
+  const uiBuildPath = fs.existsSync(path.join(DEV_UI_PATH, 'index.html'))
+    ? DEV_UI_PATH
+    : PROD_UI_PATH;
+  const uiBuildExists = fs.existsSync(path.join(uiBuildPath, 'index.html'));
 
-  let uiBuildPath = pathsToTry[0]!;
-  for (const p of pathsToTry) {
-    if (fs.existsSync(p)) {
-      uiBuildPath = p;
-      break;
-    }
-  }
-
-  // Ensure the directory exists to prevent Fastify static from throwing during startup/tests.
-  // Warn loudly if neither candidate path was found — this usually means the Vite build hasn't
-  // been run yet or the Dockerfile frontend build stage failed.
-  if (!fs.existsSync(uiBuildPath)) {
+  // No build found is a real, expected state (tests, or a fresh checkout
+  // before `npm run build` has run inside ui/) -- warn and degrade to 404
+  // for /admin/* rather than throwing, since that shouldn't take down the
+  // addon routes this same process also serves. Never create a directory
+  // on disk to paper over this -- that would mask a genuinely broken
+  // deployment (e.g. the Dockerfile's frontend build stage failing)
+  // instead of surfacing it.
+  if (!uiBuildExists) {
     app.log.warn(
       { uiBuildPath },
-      'Admin UI build directory not found — /admin/* will return 404. Run `npm run build` inside ui/ to generate assets.',
+      'Admin UI build not found -- /admin/* will 404 until `npm run build` runs inside ui/ (or the Docker image is rebuilt).',
     );
-    fs.mkdirSync(uiBuildPath, { recursive: true });
   }
 
-  // Gate administrative interface with HTTP Basic Auth
+  // Gate administrative interface with HTTP Basic Auth, regardless of
+  // whether the UI build exists -- don't leak "the build is missing" to an
+  // unauthenticated prober either.
   app.addHook('onRequest', verifyBasicAuth);
 
-  // Serve static assets. Because this plugin is registered with prefix '/admin',
-  // we map the static files prefix to '/' so they resolve under '/admin/<file>'
-  app.register(fastifyStatic, {
-    root: uiBuildPath,
-    prefix: '/',
-    decorateReply: false,
-  });
+  if (uiBuildExists) {
+    // Serve static assets. Because this plugin is registered with prefix '/admin',
+    // we map the static files prefix to '/' so they resolve under '/admin/<file>'
+    app.register(fastifyStatic, {
+      root: uiBuildPath,
+      prefix: '/',
+      decorateReply: false,
+    });
+  }
 
   // Fallback for Single Page App routing:
   // Since fastifyStatic registers wildcards, we set a plugin-scoped not-found handler.

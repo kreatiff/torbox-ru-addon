@@ -27,8 +27,9 @@ services:
     platform: linux/arm64
     # Milestone 3 shape: long-running addon server (manifest/stream/play).
     # The ingest scheduler is Milestone 6 scope; until then, trigger ingest
-    # manually: `docker compose exec app npm run ingest` (or locally, against
-    # the same DATABASE_URL).
+    # manually: `docker compose exec app node dist/ingest/runOnce.js` (not
+    # `npm run ingest` -- that invokes tsx against TypeScript source, and this
+    # image only ships compiled dist/ output plus production dependencies).
     restart: unless-stopped
     ports:
       - '${PORT:-3000}:${PORT:-3000}'
@@ -48,6 +49,13 @@ services:
       PUBLIC_BASE: ${PUBLIC_BASE}
       PORT: ${PORT:-3000}
       NOT_WEB_READY_EXTENSIONS: ${NOT_WEB_READY_EXTENSIONS:-ts}
+      # --- Milestone 4 (src/ui, admin UI & metadata) ---
+      # No defaults for ADMIN_USER/ADMIN_PASS -- same reasoning as
+      # ADDON_TOKEN: a guessable admin password reachable from the same
+      # public tunnel is a real vulnerability, not a convenience.
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASS: ${ADMIN_PASS}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

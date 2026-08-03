@@ -6,6 +6,7 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
+import type { UseMutationResult } from '@tanstack/react-query';
 import {
   List,
   Tag,
@@ -20,9 +21,136 @@ import {
   FileText,
 } from 'lucide-react';
 
-// Import the pure expandRule function and types from our backend src
+// Import the pure expandRule function and types from our backend src. Only
+// resolve/{expandRule,types}.ts qualify for this -- they're genuinely
+// dependency-free (plan.md). src/metadata/tmdb.ts pulls in zod/pino via
+// config.ts/logger.ts, so its shape is mirrored locally below instead of
+// imported, to avoid needing the backend's node_modules to build the UI.
 import { expandRule } from '../../src/resolve/expandRule.ts';
 import type { RuleFile, Mapping, Rule, RuleException } from '../../src/resolve/types.ts';
+
+// --- API response / request shapes (mirrors src/http/routes/api/index.ts) ---
+interface TmdbSearchResult {
+  tmdbId: number;
+  nameRu: string;
+  nameEn: string | null;
+  year: number | null;
+  posterUrl: string | null;
+}
+
+interface QueueItem {
+  hash: string;
+  rawNameAtIngest: string;
+  firstSeen: string;
+  fileCount: number;
+  proposal: {
+    proposedTitle: string;
+    proposedSeason: number;
+    confidence: number;
+    why: string;
+  };
+}
+
+interface FileEntry {
+  id: number;
+  rawPath: string;
+  size: number;
+  isVideo: boolean;
+  mountPath: string | null;
+}
+
+interface TorrentDetails {
+  hash: string;
+  rawNameAtIngest: string;
+  status: string;
+  files: FileEntry[];
+}
+
+interface SaveRuleBody {
+  torrentHash: string;
+  season: number;
+  numbering: 'sequential' | 'parsed' | 'continuous' | 'manual';
+  sort: 'natural' | 'path';
+  startEpisode: number;
+  absoluteOffset?: number | null;
+  exceptions: Record<string, RuleException>;
+  title?: {
+    tmdbId?: number | null;
+    nameRu: string;
+    nameEn?: string | null;
+    year?: number | null;
+    posterUrl?: string | null;
+  };
+  titleId?: string;
+}
+
+interface SaveRuleResponse {
+  success: boolean;
+  rule: unknown;
+  warning?: string;
+}
+
+interface IngestRunResult {
+  success: boolean;
+  message: string;
+}
+
+interface LibraryEpisode {
+  episode: number;
+  count: number;
+  files: string[];
+}
+
+interface LibraryRule {
+  id: string;
+  torrentHash: string;
+  numbering: string;
+  source: string;
+}
+
+interface LibrarySeason {
+  seasonNumber: number;
+  mappedEpisodesCount: number;
+  totalEpisodesCount: number | null;
+  episodes: LibraryEpisode[];
+  rules: LibraryRule[];
+}
+
+interface LibraryItem {
+  id: string;
+  nameRu: string;
+  nameEn: string | null;
+  year: number | null;
+  posterUrl: string | null;
+  imdbId: string | null;
+  tmdbId: number | null;
+  seasons: LibrarySeason[];
+}
+
+interface GoneTorrent {
+  hash: string;
+  name: string;
+  lastSeen: string;
+}
+
+interface RecentPlay {
+  id: number;
+  at: string;
+  userAgent: string | null;
+  rawPath: string;
+  titleRu: string;
+  season: number | null;
+  episode: number | null;
+}
+
+interface HealthData {
+  lastIngestRun: string | null;
+  goneCount: number;
+  goneTorrents: GoneTorrent[];
+  danglingMappings: number;
+  filesNoMountPath: number;
+  recentPlays: RecentPlay[];
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,12 +165,12 @@ const queryClient = new QueryClient({
 // No Authorization header is injected here: the browser's native Basic Auth dialog
 // (triggered by the WWW-Authenticate: Basic response from the server) handles credential
 // storage and automatically re-sends them on every request under /admin and /api.
-async function apiFetch(path: string, options: RequestInit = {}) {
+async function apiFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, options);
   if (!res.ok) {
     throw new Error(`API error: ${res.statusText} (${res.status})`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 // Majority-script homoglyph detector and renderer
@@ -82,7 +210,8 @@ function highlightHomoglyphs(name: string): React.ReactNode {
           const code = token.charCodeAt(i);
           const isCyrillic = code >= 0x0400 && code <= 0x04ff;
           const isLatin = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
-          const isMinority = (isPredominantlyLatin && isCyrillic) || (!isPredominantlyLatin && isLatin);
+          const isMinority =
+            (isPredominantlyLatin && isCyrillic) || (!isPredominantlyLatin && isLatin);
 
           if (isMinority) {
             const hex = 'U+' + code.toString(16).toUpperCase().padStart(4, '0');
@@ -140,39 +269,39 @@ function formatBytes(bytes: number): string {
 function AdminApp() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'queue' | 'labeller' | 'library' | 'health'>('queue');
-  
+
   // Navigation index for queue
   const [selectedQueueIdx, setSelectedQueueIdx] = useState<number>(0);
-  
+
   // Selected torrent for Labeller
   const [selectedTorrentHash, setSelectedTorrentHash] = useState<string | null>(null);
 
   // Queries
   const { data: queue = [], isLoading: isQueueLoading } = useQuery({
     queryKey: ['queue'],
-    queryFn: () => apiFetch('/api/queue'),
+    queryFn: () => apiFetch<QueueItem[]>('/api/queue'),
   });
 
   const { data: library = [], isLoading: isLibraryLoading } = useQuery({
     queryKey: ['library'],
-    queryFn: () => apiFetch('/api/library'),
+    queryFn: () => apiFetch<LibraryItem[]>('/api/library'),
   });
 
   const { data: health, isLoading: isHealthLoading } = useQuery({
     queryKey: ['health'],
-    queryFn: () => apiFetch('/api/health'),
+    queryFn: () => apiFetch<HealthData>('/api/health'),
     refetchInterval: 10000,
   });
 
   const { data: torrentDetails, isLoading: isDetailsLoading } = useQuery({
     queryKey: ['torrentDetails', selectedTorrentHash],
-    queryFn: () => apiFetch(`/api/torrents/${selectedTorrentHash}`),
+    queryFn: () => apiFetch<TorrentDetails>(`/api/torrents/${selectedTorrentHash}`),
     enabled: !!selectedTorrentHash,
   });
 
   // Mutations
   const triggerIngest = useMutation({
-    mutationFn: () => apiFetch('/api/ingest/run', { method: 'POST' }),
+    mutationFn: () => apiFetch<IngestRunResult>('/api/ingest/run', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['health'] });
       alert('Ingest run successfully triggered in the background.');
@@ -180,8 +309,8 @@ function AdminApp() {
   });
 
   const saveRule = useMutation({
-    mutationFn: (body: any) =>
-      apiFetch('/api/rules', {
+    mutationFn: (body: SaveRuleBody) =>
+      apiFetch<SaveRuleResponse>('/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -215,7 +344,7 @@ function AdminApp() {
           e.preventDefault();
           setSelectedQueueIdx((prev) => Math.max(prev - 1, 0));
           break;
-        case 'Enter':
+        case 'Enter': {
           e.preventDefault();
           const item = queue[selectedQueueIdx];
           if (item) {
@@ -223,7 +352,8 @@ function AdminApp() {
             setActiveTab('labeller');
           }
           break;
-        case 'a':
+        }
+        case 'a': {
           e.preventDefault();
           // Quick accept proposal
           const target = queue[selectedQueueIdx];
@@ -246,12 +376,13 @@ function AdminApp() {
             }
           }
           break;
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, queue, selectedQueueIdx]);
+  }, [activeTab, queue, selectedQueueIdx, saveRule]);
 
   return (
     <div className="app-container">
@@ -308,7 +439,11 @@ function AdminApp() {
           <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>v0.1.0 • ARM64</span>
           {health?.lastIngestRun && (
             <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-              Ingested {new Date(health.lastIngestRun).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              Ingested{' '}
+              {new Date(health.lastIngestRun).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
             </span>
           )}
         </div>
@@ -343,16 +478,10 @@ function AdminApp() {
           />
         )}
 
-        {activeTab === 'library' && (
-          <LibraryView library={library} isLoading={isLibraryLoading} />
-        )}
+        {activeTab === 'library' && <LibraryView library={library} isLoading={isLibraryLoading} />}
 
         {activeTab === 'health' && (
-          <HealthView
-            health={health}
-            isLoading={isHealthLoading}
-            triggerIngest={triggerIngest}
-          />
+          <HealthView health={health} isLoading={isHealthLoading} triggerIngest={triggerIngest} />
         )}
       </div>
     </div>
@@ -361,7 +490,7 @@ function AdminApp() {
 
 // --- QUEUE VIEW ---
 interface QueueViewProps {
-  queue: any[];
+  queue: QueueItem[];
   isLoading: boolean;
   selectedIdx: number;
   setSelectedIdx: (idx: number) => void;
@@ -384,7 +513,8 @@ function QueueView({ queue, isLoading, selectedIdx, setSelectedIdx, onSelect }: 
       <div className="view-header">
         <h2>Ingested Review Queue</h2>
         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open, <kbd>a</kbd> to quick-approve
+          Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open, <kbd>a</kbd> to
+          quick-approve
         </span>
       </div>
       <div className="view-body">
@@ -409,7 +539,15 @@ function QueueView({ queue, isLoading, selectedIdx, setSelectedIdx, onSelect }: 
                   onDoubleClick={() => onSelect(item.hash)}
                   style={{ cursor: 'pointer' }}
                 >
-                  <td className="mono" style={{ maxWidth: '400px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td
+                    className="mono"
+                    style={{
+                      maxWidth: '400px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
                     {highlightHomoglyphs(item.rawNameAtIngest)}
                   </td>
                   <td style={{ textAlign: 'center' }}>{item.fileCount}</td>
@@ -421,8 +559,8 @@ function QueueView({ queue, isLoading, selectedIdx, setSelectedIdx, onSelect }: 
                         item.proposal?.confidence >= 0.8
                           ? 'success'
                           : item.proposal?.confidence >= 0.4
-                          ? 'attention'
-                          : 'danger'
+                            ? 'attention'
+                            : 'danger'
                       }`}
                     >
                       {(item.proposal?.confidence * 100).toFixed(0)}%
@@ -453,48 +591,42 @@ function QueueView({ queue, isLoading, selectedIdx, setSelectedIdx, onSelect }: 
 // --- LABELLER VIEW ---
 interface LabellerViewProps {
   hash: string | null;
-  details: any;
+  details: TorrentDetails | undefined;
   isLoading: boolean;
-  saveRule: any;
+  saveRule: UseMutationResult<SaveRuleResponse, Error, SaveRuleBody>;
   onCancel: () => void;
 }
 function LabellerView({ hash, details, isLoading, saveRule, onCancel }: LabellerViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedShow, setSelectedShow] = useState<any | null>(null);
+  const [selectedShow, setSelectedShow] = useState<TmdbSearchResult | null>(null);
+  // Guards the details -> season/searchQuery initial-fill below so it only
+  // runs once per mount (LabellerView is remounted via `key={hash}` in the
+  // parent whenever the selected torrent changes, so this doesn't need to
+  // reset on its own).
+  const [initialized, setInitialized] = useState(false);
 
   // Form State
   const [season, setSeason] = useState(1);
-  const [numberingMode, setNumberingMode] = useState<'sequential' | 'parsed' | 'continuous' | 'manual'>('sequential');
+  const [numberingMode, setNumberingMode] = useState<
+    'sequential' | 'parsed' | 'continuous' | 'manual'
+  >('sequential');
   const [sortMode, setSortMode] = useState<'natural' | 'path'>('natural');
   const [startEpisode, setStartEpisode] = useState(1);
   const [absoluteOffset, setAbsoluteOffset] = useState<number | null>(null);
-  
+
   // exceptions map: record of fileId (string) to Exception value
   const [exceptions, setExceptions] = useState<Record<string, RuleException>>({});
-
-  // Auto-fill proposed details on load
-  useEffect(() => {
-    if (details && details.rawNameAtIngest && !selectedShow) {
-      // Set initial search query from clean torrent name
-      const name = details.rawNameAtIngest.replace(/\[.*?\]/g, '').trim();
-      const seasonMatch = name.match(/(\d+)\s*(сезон|season)/i);
-      let query = name;
-      if (seasonMatch && seasonMatch[1]) {
-        setSeason(parseInt(seasonMatch[1], 10));
-        query = name.replace(seasonMatch[0], '').trim();
-      }
-      setSearchQuery(query);
-    }
-  }, [details]);
 
   // Handle Search Trigger
   const triggerSearch = async (query: string) => {
     if (!query) return;
     setIsSearching(true);
     try {
-      const results = await apiFetch(`/api/titles/search?query=${encodeURIComponent(query)}`);
+      const results = await apiFetch<TmdbSearchResult[]>(
+        `/api/titles/search?query=${encodeURIComponent(query)}`,
+      );
       setSearchResults(results);
     } catch (err) {
       console.error(err);
@@ -505,7 +637,24 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
 
   if (isLoading || !details) return <div className="view-body">Loading files details...</div>;
 
-  const videoFiles = details.files.filter((f: any) => f.isVideo);
+  // Auto-fill proposed season/search query from the torrent name, once, the
+  // first time `details` becomes available (adjusting state during render
+  // instead of in an effect -- see https://react.dev/learn/you-might-not-need-an-effect).
+  if (!initialized) {
+    const name = details.rawNameAtIngest.replace(/\[.*?\]/g, '').trim();
+    const seasonMatch = name.match(/(\d+)\s*(сезон|season)/i);
+    let initialSeason = season;
+    let initialQuery = name;
+    if (seasonMatch && seasonMatch[1]) {
+      initialSeason = parseInt(seasonMatch[1], 10);
+      initialQuery = name.replace(seasonMatch[0], '').trim();
+    }
+    setSeason(initialSeason);
+    setSearchQuery(initialQuery);
+    setInitialized(true);
+  }
+
+  const videoFiles = details.files.filter((f) => f.isVideo);
   const totalVideoFilesCount = videoFiles.length;
 
   // Local rule representation for Client-Side expandRule preview
@@ -524,7 +673,7 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
   };
 
   // Convert files to RuleFile schema shape
-  const ruleFiles: RuleFile[] = videoFiles.map((f: any) => ({
+  const ruleFiles: RuleFile[] = videoFiles.map((f) => ({
     id: f.id,
     path: f.rawPath,
     isVideo: f.isVideo,
@@ -535,22 +684,19 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
   let previewError: string | null = null;
   try {
     previewMappings = expandRule(rule, ruleFiles);
-  } catch (err: any) {
-    previewError = err.message || 'Error executing rule preview.';
+  } catch (err) {
+    previewError = err instanceof Error ? err.message : 'Error executing rule preview.';
   }
 
   // Validate X из Y
   const xizY = parseXizY(details.rawNameAtIngest);
   const ignoredCount = Object.values(exceptions).filter((v) => v === 'ignore').length;
   const activeFilesCount = totalVideoFilesCount - ignoredCount;
-  
+
   const fileCountWarning = xizY && activeFilesCount !== xizY.x;
 
-  // Validate TMDB episode count
-  const selectedShowEpisodesCount = selectedShow?.seasons?.find((s: any) => s.season_number === season)?.episode_count ?? null;
-  const providerMismatch = selectedShowEpisodesCount && activeFilesCount !== selectedShowEpisodesCount;
-
   const handleSubmit = () => {
+    if (!hash) return;
     if (!selectedShow) {
       alert('Please search and select a TMDB Show mapping.');
       return;
@@ -601,7 +747,7 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
           </button>
         </div>
       </div>
-      
+
       <div className="view-body">
         {/* Validation Banners */}
         {xizY && (
@@ -610,34 +756,20 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
               <>
                 <AlertTriangle size={16} />
                 <span>
-                  <strong>File Count Warning:</strong> Torrent name declares <strong>{xizY.x} из {xizY.y}</strong>, but there are <strong>{activeFilesCount}</strong> active video files (excluding ignored ones).
+                  <strong>File Count Warning:</strong> Torrent name declares{' '}
+                  <strong>
+                    {xizY.x} из {xizY.y}
+                  </strong>
+                  , but there are <strong>{activeFilesCount}</strong> active video files (excluding
+                  ignored ones).
                 </span>
               </>
             ) : (
               <>
                 <CheckCircle size={16} />
                 <span>
-                  Torrent declares <strong>{xizY.x}</strong> episodes present. Matches active video file count exactly.
-                </span>
-              </>
-            )}
-          </div>
-        )}
-
-        {selectedShow && selectedShowEpisodesCount && (
-          <div className={`banner ${providerMismatch ? 'attention' : 'success'}`}>
-            {providerMismatch ? (
-              <>
-                <AlertTriangle size={16} />
-                <span>
-                  <strong>Provider Mismatch:</strong> TMDB details indicate Season {season} should have <strong>{selectedShowEpisodesCount}</strong> episodes, but you have <strong>{activeFilesCount}</strong> files mapped.
-                </span>
-              </>
-            ) : (
-              <>
-                <CheckCircle size={16} />
-                <span>
-                  Matches TMDB count. Season {season} has <strong>{selectedShowEpisodesCount}</strong> episodes.
+                  Torrent declares <strong>{xizY.x}</strong> episodes present. Matches active video
+                  file count exactly.
                 </span>
               </>
             )}
@@ -653,9 +785,26 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                 {hash?.substring(0, 8)}
               </span>
             </div>
-            <div className="pane-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ backgroundColor: 'var(--bg-main)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+            <div
+              className="pane-body"
+              style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
+            >
+              <div
+                style={{
+                  backgroundColor: 'var(--bg-main)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-muted)',
+                    display: 'block',
+                    marginBottom: '4px',
+                  }}
+                >
                   Raw Torrent Name
                 </span>
                 <div className="mono" style={{ fontSize: '13px', lineBreak: 'anywhere' }}>
@@ -672,12 +821,18 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                     </tr>
                   </thead>
                   <tbody>
-                    {videoFiles.map((file: any) => (
+                    {videoFiles.map((file) => (
                       <tr key={file.id}>
                         <td className="mono" style={{ fontSize: '12px', wordBreak: 'break-all' }}>
                           {highlightHomoglyphs(file.rawPath)}
                         </td>
-                        <td style={{ textAlign: 'right', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        <td
+                          style={{
+                            textAlign: 'right',
+                            fontSize: '11px',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
                           {formatBytes(file.size)}
                         </td>
                       </tr>
@@ -692,13 +847,12 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
           <div className="labeller-pane">
             <div className="pane-header">
               <span>Mapping Parameters</span>
-              {selectedShow && (
-                <span className="badge info">
-                  TMDB: {selectedShow.tmdbId}
-                </span>
-              )}
+              {selectedShow && <span className="badge info">TMDB: {selectedShow.tmdbId}</span>}
             </div>
-            <div className="pane-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div
+              className="pane-body"
+              style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
+            >
               {/* Show Picker Search */}
               <div className="form-group" style={{ position: 'relative' }}>
                 <label>Find TMDB Series</label>
@@ -711,7 +865,11 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                     onKeyDown={(e) => e.key === 'Enter' && triggerSearch(searchQuery)}
                   />
                   <button className="btn btn-secondary" onClick={() => triggerSearch(searchQuery)}>
-                    {isSearching ? <RefreshCw className="animate-spin" size={16} /> : <Search size={16} />}
+                    {isSearching ? (
+                      <RefreshCw className="animate-spin" size={16} />
+                    ) : (
+                      <Search size={16} />
+                    )}
                   </button>
                 </div>
 
@@ -750,9 +908,25 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                         className="hover-highlight"
                       >
                         {show.posterUrl ? (
-                          <img src={show.posterUrl} alt="" style={{ width: '30px', height: '45px', objectFit: 'cover', borderRadius: '2px' }} />
+                          <img
+                            src={show.posterUrl}
+                            alt=""
+                            style={{
+                              width: '30px',
+                              height: '45px',
+                              objectFit: 'cover',
+                              borderRadius: '2px',
+                            }}
+                          />
                         ) : (
-                          <div style={{ width: '30px', height: '45px', backgroundColor: 'var(--bg-main)', borderRadius: '2px' }} />
+                          <div
+                            style={{
+                              width: '30px',
+                              height: '45px',
+                              backgroundColor: 'var(--bg-main)',
+                              borderRadius: '2px',
+                            }}
+                          />
                         )}
                         <div>
                           <div style={{ fontSize: '13px', fontWeight: 600 }}>{show.nameRu}</div>
@@ -779,10 +953,21 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                   }}
                 >
                   {selectedShow.posterUrl && (
-                    <img src={selectedShow.posterUrl} alt="" style={{ width: '50px', height: '75px', objectFit: 'cover', borderRadius: '4px' }} />
+                    <img
+                      src={selectedShow.posterUrl}
+                      alt=""
+                      style={{
+                        width: '50px',
+                        height: '75px',
+                        objectFit: 'cover',
+                        borderRadius: '4px',
+                      }}
+                    />
                   )}
                   <div>
-                    <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600 }}>{selectedShow.nameRu}</h4>
+                    <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600 }}>
+                      {selectedShow.nameRu}
+                    </h4>
                     <p style={{ margin: '0', fontSize: '12px', color: 'var(--text-muted)' }}>
                       Original: {selectedShow.nameEn}
                     </p>
@@ -815,7 +1000,11 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                   <label>Numbering Mode</label>
                   <select
                     value={numberingMode}
-                    onChange={(e: any) => setNumberingMode(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                      setNumberingMode(
+                        e.target.value as 'sequential' | 'parsed' | 'continuous' | 'manual',
+                      )
+                    }
                   >
                     <option value="sequential">sequential</option>
                     <option value="continuous">continuous</option>
@@ -829,7 +1018,9 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                   <label>Sort Mode</label>
                   <select
                     value={sortMode}
-                    onChange={(e: any) => setSortMode(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                      setSortMode(e.target.value as 'natural' | 'path')
+                    }
                   >
                     <option value="natural">natural</option>
                     <option value="path">path</option>
@@ -864,7 +1055,15 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
         </div>
 
         {/* Live Preview Table */}
-        <div style={{ marginTop: '24px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', backgroundColor: 'var(--bg-surface)' }}>
+        <div
+          style={{
+            marginTop: '24px',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            overflow: 'hidden',
+            backgroundColor: 'var(--bg-surface)',
+          }}
+        >
           <div className="pane-header">
             <span>Client-Side Live Preview (`expandRule` Run)</span>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -887,7 +1086,7 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                   </tr>
                 </thead>
                 <tbody>
-                  {videoFiles.map((file: any) => {
+                  {videoFiles.map((file) => {
                     const resolvedMapping = previewMappings.find((m) => m.fileId === file.id);
                     const exceptionVal = exceptions[String(file.id)];
 
@@ -899,7 +1098,8 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                         <td style={{ textAlign: 'center', fontWeight: 'bold' }}>
                           {resolvedMapping ? (
                             <span className="mono" style={{ color: 'var(--accent-info)' }}>
-                              S{String(resolvedMapping.season).padStart(2, '0')}E{String(resolvedMapping.episode).padStart(2, '0')}
+                              S{String(resolvedMapping.season).padStart(2, '0')}E
+                              {String(resolvedMapping.episode).padStart(2, '0')}
                             </span>
                           ) : exceptionVal === 'ignore' ? (
                             <span className="badge neutral">IGNORED</span>
@@ -914,8 +1114,8 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                                 exceptionVal === undefined
                                   ? 'none'
                                   : exceptionVal === 'ignore'
-                                  ? 'ignore'
-                                  : 'custom'
+                                    ? 'ignore'
+                                    : 'custom'
                               }
                               onChange={(e) => {
                                 const val = e.target.value;
@@ -958,7 +1158,7 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
 
 // --- LIBRARY VIEW ---
 interface LibraryViewProps {
-  library: any[];
+  library: LibraryItem[];
   isLoading: boolean;
 }
 function LibraryView({ library, isLoading }: LibraryViewProps) {
@@ -977,7 +1177,15 @@ function LibraryView({ library, isLoading }: LibraryViewProps) {
                 {show.posterUrl ? (
                   <img src={show.posterUrl} alt="" className="library-card-poster" />
                 ) : (
-                  <div className="library-card-poster" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-surface-elevated)' }}>
+                  <div
+                    className="library-card-poster"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: 'var(--bg-surface-elevated)',
+                    }}
+                  >
                     <FolderOpen size={24} color="var(--text-dim)" />
                   </div>
                 )}
@@ -985,44 +1193,49 @@ function LibraryView({ library, isLoading }: LibraryViewProps) {
                   <h3>{show.nameRu}</h3>
                   <span style={{ display: 'block' }}>{show.nameEn}</span>
                   <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-                    {show.year ?? 'N/A'} • {show.imdbId || show.tmdbId ? (show.imdbId || `tmdb:${show.tmdbId}`) : 'No Provider ID'}
+                    {show.year ?? 'N/A'} •{' '}
+                    {show.imdbId || show.tmdbId
+                      ? show.imdbId || `tmdb:${show.tmdbId}`
+                      : 'No Provider ID'}
                   </span>
                 </div>
               </div>
 
               <div className="library-card-seasons">
-                {show.seasons.map((season: any) => {
+                {show.seasons.map((season) => {
                   const totalCount = season.totalEpisodesCount ?? 0;
-                  
+
                   // Build a sparse array representing episode boxes
                   const maxEp = Math.max(
                     totalCount,
-                    season.episodes.reduce((max: number, curr: any) => Math.max(max, curr.episode), 0),
+                    season.episodes.reduce((max: number, curr) => Math.max(max, curr.episode), 0),
                   );
-                  
+
                   const boxes = [];
                   for (let ep = 1; ep <= maxEp; ep++) {
-                    const match = season.episodes.find((e: any) => e.episode === ep);
+                    const match = season.episodes.find((e) => e.episode === ep);
                     const state = !match ? 'empty' : match.count > 1 ? 'duplicate' : 'mapped';
                     const tooltipText = !match
                       ? `Episode ${ep} (Missing)`
                       : match.count > 1
-                      ? `Episode ${ep} (${match.count} files matched: ${match.files.join(', ')})`
-                      : `Episode ${ep} (Matched: ${match.files[0]})`;
-                      
+                        ? `Episode ${ep} (${match.count} files matched: ${match.files.join(', ')})`
+                        : `Episode ${ep} (Matched: ${match.files[0]})`;
+
                     boxes.push(
-                      <div
-                        key={ep}
-                        className={`episode-box ${state}`}
-                        data-tooltip={tooltipText}
-                      >
+                      <div key={ep} className={`episode-box ${state}`} data-tooltip={tooltipText}>
                         {ep}
                       </div>,
                     );
                   }
 
                   return (
-                    <div key={season.seasonNumber} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '8px' }}>
+                    <div
+                      key={season.seasonNumber}
+                      style={{
+                        borderBottom: '1px solid rgba(255,255,255,0.03)',
+                        paddingBottom: '8px',
+                      }}
+                    >
                       <div className="season-row">
                         <strong>Season {season.seasonNumber}</strong>
                         <span style={{ color: 'var(--text-muted)' }}>
@@ -1044,9 +1257,9 @@ function LibraryView({ library, isLoading }: LibraryViewProps) {
 
 // --- HEALTH VIEW ---
 interface HealthViewProps {
-  health: any;
+  health: HealthData | undefined;
   isLoading: boolean;
-  triggerIngest: any;
+  triggerIngest: UseMutationResult<IngestRunResult, Error, void>;
 }
 function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
   if (isLoading || !health) return <div className="view-body">Loading health statistics...</div>;
@@ -1067,38 +1280,85 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
       <div className="view-body" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {/* Row of stats cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-          <div style={{ backgroundColor: 'var(--bg-surface)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', gap: '16px' }}>
+          <div
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              padding: '16px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              gap: '16px',
+            }}
+          >
             <Clock size={32} color="var(--accent-info)" />
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Last Ingest Run</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
+                Last Ingest Run
+              </span>
               <strong style={{ fontSize: '16px' }}>
                 {health.lastIngestRun
-                  ? new Date(health.lastIngestRun).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  ? new Date(health.lastIngestRun).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
                   : 'Never'}
               </strong>
             </div>
           </div>
 
-          <div style={{ backgroundColor: 'var(--bg-surface)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', gap: '16px' }}>
+          <div
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              padding: '16px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              gap: '16px',
+            }}
+          >
             <AlertTriangle size={32} color="var(--accent-danger)" />
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Gone Torrents</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
+                Gone Torrents
+              </span>
               <strong style={{ fontSize: '16px' }}>{health.goneCount}</strong>
             </div>
           </div>
 
-          <div style={{ backgroundColor: 'var(--bg-surface)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', gap: '16px' }}>
+          <div
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              padding: '16px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              gap: '16px',
+            }}
+          >
             <Database size={32} color="var(--accent-attention)" />
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Dangling Mappings</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
+                Dangling Mappings
+              </span>
               <strong style={{ fontSize: '16px' }}>{health.danglingMappings}</strong>
             </div>
           </div>
 
-          <div style={{ backgroundColor: 'var(--bg-surface)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', gap: '16px' }}>
+          <div
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              padding: '16px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              gap: '16px',
+            }}
+          >
             <FileText size={32} color="var(--text-muted)" />
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Files w/o Mount Path</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
+                Files w/o Mount Path
+              </span>
               <strong style={{ fontSize: '16px' }}>{health.filesNoMountPath}</strong>
             </div>
           </div>
@@ -1107,15 +1367,43 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
         {/* Gone list & Play log split */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
           {/* Gone List */}
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>Gone Torrents Audit (Recent 10)</h3>
+          <div
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '16px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>
+              Gone Torrents Audit (Recent 10)
+            </h3>
             {health.goneTorrents.length === 0 ? (
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No gone torrents recorded.</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                No gone torrents recorded.
+              </p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {health.goneTorrents.map((t: any) => (
-                  <div key={t.hash} style={{ padding: '8px', background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '12px' }}>
-                    <div className="mono" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {health.goneTorrents.map((t) => (
+                  <div
+                    key={t.hash}
+                    style={{
+                      padding: '8px',
+                      background: 'var(--bg-main)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <div
+                      className="mono"
+                      style={{
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
                       {t.name}
                     </div>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -1128,10 +1416,21 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
           </div>
 
           {/* Recent Plays */}
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>Playback Audit History (Recent 50)</h3>
+          <div
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '16px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>
+              Playback Audit History (Recent 50)
+            </h3>
             {health.recentPlays.length === 0 ? (
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No play history logged yet.</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                No play history logged yet.
+              </p>
             ) : (
               <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 <table>
@@ -1144,16 +1443,31 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {health.recentPlays.map((p: any) => (
+                    {health.recentPlays.map((p) => (
                       <tr key={p.id}>
-                        <td style={{ whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        <td
+                          style={{
+                            whiteSpace: 'nowrap',
+                            fontSize: '11px',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
                           {new Date(p.at).toLocaleTimeString()}
                         </td>
                         <td>{p.titleRu}</td>
                         <td style={{ fontWeight: 'bold' }}>
                           S{String(p.season).padStart(2, '0')}E{String(p.episode).padStart(2, '0')}
                         </td>
-                        <td className="mono" style={{ fontSize: '11px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <td
+                          className="mono"
+                          style={{
+                            fontSize: '11px',
+                            maxWidth: '300px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
                           {p.rawPath}
                         </td>
                       </tr>

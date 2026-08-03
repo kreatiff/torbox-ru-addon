@@ -7,6 +7,7 @@ import {
   listTitlesWithSeasons,
   upsertRule,
   upsertProviderSeason,
+  getProviderSeason,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest } from '../../../ingest/pipeline.js';
@@ -20,13 +21,15 @@ const saveRuleBodySchema = z.object({
   sort: z.enum(['natural', 'path']),
   startEpisode: z.number().int().positive().default(1),
   absoluteOffset: z.number().int().nullable().optional(),
-  exceptions: z.record(
-    z.string(),
-    z.union([
-      z.literal('ignore'),
-      z.object({ season: z.number().int(), episode: z.number().int() }),
-    ]),
-  ).default({}),
+  exceptions: z
+    .record(
+      z.string(),
+      z.union([
+        z.literal('ignore'),
+        z.object({ season: z.number().int(), episode: z.number().int() }),
+      ]),
+    )
+    .default({}),
   title: z
     .object({
       tmdbId: z.number().int().optional().nullable(),
@@ -46,7 +49,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', verifyBasicAuth);
 
   // GET /api/queue - Torrents needing review
-  app.get('/queue', async (request, reply) => {
+  app.get('/queue', async (_request, _reply) => {
     const result = await pool.query(
       `select t.hash, t.raw_name_at_ingest, t.first_seen, count(f.id) as file_count
        from torrents t
@@ -128,7 +131,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/titles/search - Search TMDB
-  app.get('/titles/search', async (request, reply) => {
+  app.get('/titles/search', async (request, _reply) => {
     const { query } = request.query as { query?: string };
     if (!query) {
       return [];
@@ -140,6 +143,20 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/rules - Create or update manual rule
   app.post('/rules', async (request, reply) => {
     const body = saveRuleBodySchema.parse(request.body);
+
+    // 'parsed' needs the extractor cascade, which isn't built yet
+    // (Milestone 5) -- expandRule throws for this mode by design. Reject
+    // up front rather than writing a rule row and only discovering this
+    // when rebuildMappingsForRule throws below (which would leave a rule
+    // committed with no mappings and a bare 500 for the client). The
+    // Labeller UI already renders this option disabled; this is the same
+    // guarantee enforced at the API boundary, not just the UI.
+    if (body.numbering === 'parsed') {
+      return reply.code(400).send({
+        error:
+          "numbering 'parsed' is not implemented yet (Milestone 5) -- use sequential, continuous, or manual",
+      });
+    }
 
     let titleId = body.titleId;
 
@@ -155,7 +172,10 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
           imdbId = imdbId || external.imdbId;
           tvdbId = tvdbId || external.tvdbId;
         } catch (err) {
-          app.log.warn({ err, tmdbId: body.title.tmdbId }, 'Failed to fetch external ids from TMDB');
+          app.log.warn(
+            { err, tmdbId: body.title.tmdbId },
+            'Failed to fetch external ids from TMDB',
+          );
         }
       }
 
@@ -176,21 +196,31 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'titleId or title is required' });
     }
 
-    // Cache TMDB season details if TMDB ID is available
+    // Cache TMDB season details if TMDB ID is available -- check the cache
+    // first (§5.4: "cache aggressively... these change rarely"). Without
+    // this, every rule saved against the same show+season re-fetches
+    // identical data live from TMDB, e.g. once per torrent for a
+    // one-torrent-per-episode show.
     if (body.title?.tmdbId) {
       try {
-        const episodes = await fetchSeasonDetails(body.title.tmdbId, body.season);
-        if (episodes.length > 0) {
-          await upsertProviderSeason({
-            title_id: titleId,
-            season: body.season,
-            source: 'tmdb',
-            episode_count: episodes.length,
-            episodes: episodes,
-          });
+        const cached = await getProviderSeason(titleId, body.season, 'tmdb');
+        if (!cached) {
+          const episodes = await fetchSeasonDetails(body.title.tmdbId, body.season);
+          if (episodes.length > 0) {
+            await upsertProviderSeason({
+              title_id: titleId,
+              season: body.season,
+              source: 'tmdb',
+              episode_count: episodes.length,
+              episodes: episodes,
+            });
+          }
         }
       } catch (err) {
-        app.log.warn({ err, tmdbId: body.title.tmdbId, season: body.season }, 'Failed to fetch/cache season details from TMDB');
+        app.log.warn(
+          { err, tmdbId: body.title.tmdbId, season: body.season },
+          'Failed to fetch/cache season details from TMDB',
+        );
       }
     }
 
@@ -208,14 +238,27 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       source: 'manual',
     });
 
-    // Rebuild mappings for this rule
-    await rebuildMappingsForRule(rule.id);
+    // Rebuild mappings for this rule. The rule is already committed at this
+    // point, so a failure here (a malformed exceptions map, a torrent with
+    // no video files, etc.) shouldn't surface as a bare 500 -- report it
+    // clearly and let the rule get picked up by the next full ingest's
+    // rebuildAllMappings(), which already tolerates per-rule failures.
+    try {
+      await rebuildMappingsForRule(rule.id);
+    } catch (err) {
+      app.log.error({ err, ruleId: rule.id }, 'Failed to rebuild mappings for saved rule');
+      return reply.code(207).send({
+        success: true,
+        rule,
+        warning: 'Rule saved, but rebuilding its mappings failed -- check server logs.',
+      });
+    }
 
     return { success: true, rule };
   });
 
   // GET /api/library - Grouped titles + seasons + episode coverage grid
-  app.get('/library', async (request, reply) => {
+  app.get('/library', async (_request, _reply) => {
     const titles = await listTitlesWithSeasons();
 
     const result = await Promise.all(
@@ -277,7 +320,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/health - Diagnostic dashboard data
-  app.get('/health', async (request, reply) => {
+  app.get('/health', async (_request, _reply) => {
     // 1. Last ingest run timestamp (max last_seen of active torrents)
     const ingestResult = await pool.query('select max(last_seen) as last_seen from torrents');
     const lastIngestRun = ingestResult.rows[0]?.last_seen ?? null;
@@ -308,7 +351,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
 
     // 5. Files with no mount_path
     const noMountResult = await pool.query(
-      "select count(*) from files where is_video = true and mount_path is null",
+      'select count(*) from files where is_video = true and mount_path is null',
     );
     const filesNoMountPath = parseInt(noMountResult.rows[0]?.count ?? '0', 10);
 
@@ -343,7 +386,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST /api/ingest/run - Trigger ingest run
-  app.post('/ingest/run', async (request, reply) => {
+  app.post('/ingest/run', async (_request, _reply) => {
     // Run in background so we don't timeout the response
     runIngest().catch((err) => {
       app.log.error({ err }, 'Background Ingest Run failed');
