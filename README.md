@@ -29,25 +29,43 @@ silently — see `torbox-ru-addon-plan.md`, or search this codebase for `§3.`
 comments, which point back at the specific spec section each decision
 responds to.
 
-**TorBox API connectivity and the real ARM64-targeted Dockerfile are now
-verified**, once the build sandbox's network policy was opened up. Confirmed
-against the live API (with an invalid token, since no real account is
-available here): the envelope shape `{success, error, detail, data}` in
-`src/torbox/envelope.ts`/`schemas.ts` matches exactly what
-`api.torbox.app` actually returns on an auth error. The full multi-stage
-Dockerfile builds successfully and the resulting image, run against real
-Postgres, correctly migrates, attempts ingest, hits the real API, and fails
-cleanly on the bad token — no crash. That verification pass also caught and
-fixed a real bug: `pg.Pool` had no `'error'` listener and `migrateUp()`
-wasn't wrapped in error handling, so a DB-unreachable-at-boot condition
-crashed the process instead of failing gracefully (see `decisions.md`).
+**TorBox API connectivity and the real ARM64-targeted Dockerfile are
+verified**, first against a bad token (envelope shape `{success, error,
+detail, data}` in `src/torbox/envelope.ts`/`schemas.ts` matched exactly
+what `api.torbox.app` returns on an auth error) and since then against a
+real account (see below). The full multi-stage Dockerfile builds
+successfully and the resulting image, run against real Postgres, correctly
+migrates and ingests. That first verification pass also caught and fixed a
+real bug: `pg.Pool` had no `'error'` listener and `migrateUp()` wasn't
+wrapped in error handling, so a DB-unreachable-at-boot condition crashed
+the process instead of failing gracefully (see `decisions.md`).
 
-**Still not verified:** an actual *successful* ingest against a real TorBox
-account (no API key is available in this environment — only connectivity
-and the error-response shape were confirmed), and a true `linux/arm64` build
-(this sandbox's nested-Docker QEMU emulation doesn't work — even `uname -m`
-fails under it — so the Dockerfile was validated on the host's native
-architecture instead; nothing in the codebase is architecture-specific).
+**A successful ingest against a real TorBox account is now verified too.**
+With a real `TORBOX_API_KEY` supplied, `getMylist()` pulled the repo owner's
+actual library end to end: 210 torrents, 2067 files (1408 video), parsed
+through `mylistResponseSchema` with zero schema mismatches. The real
+library contains the exact spec §1 example torrents verbatim — including
+the `Bolshoy.Kush...(1080р)` Cyrillic-`р` homoglyph case — and all of it,
+plus the two Milestone 2 hand-written rules, round-tripped through Postgres
+and `expandRule` correctly (42/42 tests passing against real Postgres 16;
+18/18 files mapped to the right episodes). Re-running ingest a couple of
+minutes later against the same live, changing account correctly upserted
+with `torrentsNew: 0` and marked 2 newly-absent torrents `gone` — real
+confirmation of the dedup and mark-gone paths, not just the happy path.
+The full built container image (not just `tsc`/`vitest` on the host) was
+also re-run against real Postgres and the live API with the same result.
+
+**Still not verified:** a true `linux/arm64` build (this build sandbox's
+nested-Docker QEMU emulation still doesn't work — re-confirmed with `docker
+run --platform linux/arm64 node:22-alpine uname -m` → `exec format error`
+— so the image is validated on the host's native architecture instead;
+nothing in the codebase is architecture-specific). Separately,
+`refreshWebdav()`'s force-refresh call still doesn't succeed: it needs
+WebDAV Basic-auth credentials distinct from `TORBOX_API_KEY` (confirmed via
+`WWW-Authenticate: Basic realm="TorBox WebDAV"`), which this repo doesn't
+have. Harmless today — the call is best-effort and ingest doesn't depend on
+it — but force-refresh itself needs those credentials from the repo owner
+to ever actually work. See `decisions.md` for both.
 
 ## Setup
 

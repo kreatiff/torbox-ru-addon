@@ -29,14 +29,29 @@ surfaced and fixed a genuine bug: `pg.Pool` had no `'error'` listener and `migra
 wrapped in error handling, so a DB-unreachable-at-boot condition crashed the process instead of
 exiting cleanly (see `decisions.md`).
 
-**Still not verified:** a successful ingest against a real account (no `TORBOX_API_KEY` is
-available in this environment), and a true `linux/arm64` build (this sandbox's nested-Docker
-QEMU emulation is non-functional — confirmed by isolating the failure down to `uname -m` under
-`--platform linux/arm64` failing the same way — so the image was validated on the host's native
+**Update once a real `TORBOX_API_KEY` became available:** a full ingest ran against the repo
+owner's actual TorBox account — 210 torrents, 2067 files (1408 of them video), one API call,
+zero schema-validation failures. The real library contains the exact spec §1 example torrents
+verbatim, including the `Bolshoy.Kush...(1080р)` Cyrillic-`р` homoglyph case, and all of it
+round-tripped through Postgres correctly. Re-running ingest a second time (a couple of minutes
+later) upserted the same 210 torrents with `torrentsNew: 0` and correctly marked 2 torrents
+`gone` that had disappeared from the account in the interim — real confirmation of both the
+dedup and the mark-gone path against a live, changing library. The same live ingest, migrate,
+and mapping-rebuild sequence was also re-run inside the actual built container image (`docker
+run`, real Postgres, real API) with the same result. Separately, `refreshWebdav()`'s "auth
+mechanism unconfirmed" note is now resolved — see `decisions.md`: it needs WebDAV Basic-auth
+credentials distinct from `TORBOX_API_KEY`, which this repo doesn't have, so the force-refresh
+step still no-ops (harmlessly; see its own best-effort design).
+
+**Still not verified:** a true `linux/arm64` build (this build sandbox's nested-Docker QEMU
+emulation is still non-functional — re-confirmed with `docker run --platform linux/arm64
+node:22-alpine uname -m` → `exec format error` — so the image is validated on the host's native
 architecture instead; nothing in the codebase is architecture-specific).
 
-**To actually run this for real, the repo owner needs to:** supply a real `TORBOX_API_KEY`,
-and run `docker compose up` on the actual Oracle Cloud ARM64 host.
+**To actually run this for real, the repo owner needs to:** run `docker compose up` on the
+actual Oracle Cloud ARM64 host (the `TORBOX_API_KEY` gap is closed); supply real WebDAV
+Basic-auth credentials if force-refresh (rather than the 15-minute passive refresh) matters in
+practice.
 
 ## 2. Two rules inserted by hand as SQL — ✅ done
 
