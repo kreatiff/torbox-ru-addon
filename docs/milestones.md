@@ -75,24 +75,39 @@ produces exactly the right `mappings` rows (spot-checked directly via `psql`, an
 isn't an `expandRule` case at all — `expandRule` never sees "X из Y"; that's a
 confidence-scoring input for `proposeRule`, Milestone 5.
 
-## 3. Manifest + stream + play — ⏳ not started
+## 3. Manifest + stream + play — ✅ built, verified as far as an isolated sandbox allows
 
 > Install in Stremio and in AIOStreams as a custom addon. Confirm actual playback of a `.ts`
 > file and an `.mp4` file. The data model is free to change until this works and expensive to
 > change after.
 
-Not yet built: `src/http` doesn't exist yet. This is the next milestone in sequence.
+Built: `src/http/` — a Fastify server (`server.ts`), constant-time `:token` auth
+(`hooks/verifyAddonToken.ts`), and the three addon routes
+(`routes/addon/{manifest,stream,play}.ts`). `titlesRepo.findByImdbId` (read-only —
+`findOrCreate` stays Milestone 4), `mappingsRepo.findMappingsForEpisode`, and
+`filesRepo.findByIdsWithTorrent` added to resolve a Stremio `tt...:season:episode` id down to
+real files. `src/index.ts` changes shape from Milestone 1's one-shot batch job to a persistent
+server (migrate → listen → stay running); ingest itself stays manual until Milestone 6's
+scheduler lands. New config: `ADDON_TOKEN`, `PUBLIC_BASE` (both required), `PORT` (default
+3000), `NOT_WEB_READY_EXTENSIONS` (default `ts`) — see decisions log.
 
-**Why it's paused here rather than in progress:** this milestone's own success criterion —
-real playback confirmed inside real Stremio and AIOStreams clients — needs the repo owner's
-real TorBox account, a deployed instance reachable from those clients, and the clients
-themselves. That's not achievable from an isolated build sandbox. The plan is to build and test
-everything that *can* be verified without a live deployment (manifest shape, token
-constant-time auth, stream-URL construction, the `/play/:fileId` redirect logic against a
-mocked TorBox response) and then hand off the live-playback confirmation step.
+**Verified:** exactly what was flagged as achievable without a live deployment — manifest
+shape (`types: ["series"]`, confirmed with the repo owner), token auth (valid/invalid/missing,
+all a 404 per the LOCKED framing), stream resolution against real Postgres rows
+(`test/http/addon.test.ts`), and the `/play/:fileId` redirect + `play_log` write against a
+mocked TorBox response (`test/http/play.test.ts`) — 56/56 tests passing. Beyond that, with a
+real `TORBOX_API_KEY` available, the built server was also run for real against a throwaway
+local Postgres seeded with one real ingested file: `/manifest.json`, a wrong token (404), and
+`/stream/series/:id.json` all behaved exactly as the automated tests predict, and
+`/play/:fileId` was hit for real — a genuine 302 to a real, signed `tb-cdn.io` URL, with a real
+`play_log` row written. That real call also surfaced a genuine finding about `requestdl`
+itself, not a bug in this addon — see the decisions log entry on `/play/:fileId` and what it
+can and can't protect.
 
-**Needs from the repo owner before this can be verified for real:** `ADDON_TOKEN`,
-`PUBLIC_BASE` (the Cloudflare Tunnel hostname), and the deployed instance itself.
+**Still needs the repo owner, same as before:** a real deployment reachable from the internet
+(`PUBLIC_BASE`, the Cloudflare Tunnel) and installing the manifest URL in real Stremio and
+AIOStreams to confirm actual playback of a `.ts` and an `.mp4` file — that's this milestone's
+actual, stated success criterion, and still isn't achievable from an isolated build sandbox.
 
 ## 4. Labeller UI — ⏳ not started
 
@@ -125,7 +140,9 @@ the admin surface.
 
 ---
 
-**Overall:** 2 of 6 milestones done, both verified as thoroughly as an isolated build sandbox
-allows. The next real blocker isn't code — it's the repo owner's live TorBox account and
-Oracle Cloud host, needed to actually confirm Milestone 1's ingest and unblock Milestone 3's
-playback requirement.
+**Overall:** 3 of 6 milestones done, each verified as thoroughly as an isolated build sandbox
+allows. Milestone 1's own real-ARM64-host criterion has since also been satisfied for real: the
+repo owner deployed the GHCR-published image via Portainer on the actual target host and a
+real ingest ran cleanly (210 torrents, 2067 files, clean exit). The next real blocker isn't
+code — it's the repo owner's live deployment and Stremio/AIOStreams installs, needed to
+confirm Milestone 3's actual playback requirement.

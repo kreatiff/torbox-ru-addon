@@ -66,3 +66,23 @@ export const mappingRowSchema = z.object({
   rule_id: z.string().nullable(),
 });
 export type MappingRow = z.infer<typeof mappingRowSchema>;
+
+export const titleRowSchema = z.object({
+  id: z.string(),
+  imdb_id: z.string().nullable(),
+  tvdb_id: z.number().int().nullable(),
+  tmdb_id: z.number().int().nullable(),
+  name_ru: z.string(),
+  name_en: z.string().nullable(),
+  year: z.number().int().nullable(),
+  aliases: z.array(z.string()),
+});
+export type TitleRow = z.infer<typeof titleRowSchema>;
+
+export const playLogRowSchema = z.object({
+  id: z.number().int(),
+  file_id: z.number().int().nullable(),
+  at: z.date(),
+  user_agent: z.string().nullable(),
+});
+export type PlayLogRow = z.infer<typeof playLogRowSchema>;

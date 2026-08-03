@@ -1,23 +1,33 @@
 import { migrateUp } from './db/migrate.js';
 import { pool } from './db/pool.js';
 import { logger } from './logger.js';
-import { runIngest } from './ingest/pipeline.js';
+import { config } from './config.js';
+import { build } from './http/server.js';
 
-// Milestone 1 shape: migrate, ingest once, exit — this is the whole "app"
-// for now (`docker compose up` should produce real rows in torrents/files).
-// From Milestone 3 onward this becomes: migrate -> start the Fastify server
-// -> start the ingest scheduler, and stays running. `npm run ingest`
-// (src/ingest/runOnce.ts) exercises just the pipeline in isolation and will
-// keep doing so once this file's shape changes.
+// Milestone 3 shape: migrate -> start the Fastify addon server -> stay
+// running. The ingest scheduler is Milestone 6 scope (see decisions.md);
+// until then, `npm run ingest` (src/ingest/runOnce.ts, unchanged) remains
+// the only way to trigger a run.
+logger.info({ nodeEnv: config.nodeEnv }, 'torbox-ru starting (Milestone 3: addon server)');
 
-logger.info({ nodeEnv: process.env.NODE_ENV }, 'torbox-ru starting (Milestone 1: ingest only)');
+const app = build();
+
+async function shutdown(signal: string): Promise<void> {
+  logger.info({ signal }, 'shutting down');
+  try {
+    await app.close();
+  } finally {
+    await pool.end();
+  }
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 try {
   await migrateUp();
-  await runIngest();
+  await app.listen({ host: '0.0.0.0', port: config.port });
 } catch (err) {
-  logger.error({ err }, 'startup failed (migration or ingest)');
-  process.exitCode = 1;
-} finally {
+  logger.error({ err }, 'startup failed (migration or server listen)');
   await pool.end();
+  process.exitCode = 1;
 }

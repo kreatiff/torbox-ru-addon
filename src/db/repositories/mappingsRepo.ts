@@ -48,3 +48,22 @@ export async function listMappingsForRule(ruleId: string): Promise<Mapping[]> {
   ]);
   return result.rows.map((row) => toMapping(mappingRowSchema.parse(row)));
 }
+
+/**
+ * Powers the addon's stream route (Milestone 3): every file currently
+ * mapped to a given (title, season, episode), via the index created
+ * alongside this table. More than one row is possible by design (§4:
+ * "multiple files may map to the same episode" -- e.g. an "8 из 13" torrent
+ * superseded by a "13 из 13" one; both held).
+ */
+export async function findMappingsForEpisode(
+  titleId: string,
+  season: number,
+  episode: number,
+): Promise<Mapping[]> {
+  const result = await pool.query(
+    'select * from mappings where title_id = $1 and season = $2 and episode = $3 order by file_id',
+    [titleId, season, episode],
+  );
+  return result.rows.map((row) => toMapping(mappingRowSchema.parse(row)));
+}

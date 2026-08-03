@@ -25,10 +25,13 @@ services:
       context: .
       dockerfile: Dockerfile
     platform: linux/arm64
-    # Milestone 1 shape: one ingest run per `docker compose up`, then exit.
-    # Switches to a long-running server + internal scheduler in Milestone
-    # 3/6 — restart policy and a ports mapping belong here once that lands.
-    restart: 'no'
+    # Milestone 3 shape: long-running addon server (manifest/stream/play).
+    # The ingest scheduler is Milestone 6 scope; until then, trigger ingest
+    # manually: `docker compose exec app npm run ingest` (or locally, against
+    # the same DATABASE_URL).
+    restart: unless-stopped
+    ports:
+      - '${PORT:-3000}:${PORT:-3000}'
     environment:
       # Explicit (not env_file:) so this works the same whether the values
       # come from a local .env (Compose still auto-loads one from the
@@ -40,6 +43,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://torbox:changeme@postgres:5432/torbox_ru}
       TORBOX_REQUEST_DELAY_MS: ${TORBOX_REQUEST_DELAY_MS:-250}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # --- Milestone 3 (src/http, the addon) ---
+      ADDON_TOKEN: ${ADDON_TOKEN}
+      PUBLIC_BASE: ${PUBLIC_BASE}
+      PORT: ${PORT:-3000}
+      NOT_WEB_READY_EXTENSIONS: ${NOT_WEB_READY_EXTENSIONS:-ts}
     depends_on:
       postgres:
         condition: service_healthy

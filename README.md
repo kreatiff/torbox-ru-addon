@@ -12,15 +12,17 @@ access to (see `docs/history.md`).
 
 ## Status
 
-**Milestones 1-2 of 6 done (locked build order, spec §6).** Ingest (TorBox
+**Milestones 1-3 of 6 done (locked build order, spec §6).** Ingest (TorBox
 client, schema, migrations, `mylist` → Postgres with snapshots) plus
 `expandRule`: pure, exhaustively tested, and verified end to end against two
 hand-written SQL rules using the real examples from spec §1 (see
 `scripts/seed/milestone-2-example.sql`, `test/ingest/materialize.test.ts`).
 Three of the four `numbering` modes are implemented (`sequential`,
 `continuous`, `manual`); `parsed` throws a clear not-yet error until the
-extractor cascade lands in Milestone 5, per the locked build order. No
-addon routes or UI yet — Milestones 3-4.
+extractor cascade lands in Milestone 5, per the locked build order. The
+Stremio-facing addon (`/manifest.json`, `/stream/series/:id.json`,
+`/play/:fileId` — see "Milestone 3: the addon" below) is built. No admin UI
+yet — Milestone 4.
 
 A handful of decisions the spec left open (confidence formula, numbering-mode
 semantics, an additive `provider_seasons` table, a couple of others) were
@@ -67,22 +69,42 @@ have. Harmless today — the call is best-effort and ingest doesn't depend on
 it — but force-refresh itself needs those credentials from the repo owner
 to ever actually work. See `decisions.md` for both.
 
+**Milestone 3 (the addon) is built and verified as far as this sandbox
+allows.** Manifest shape, constant-time `:token` auth (valid/invalid/missing,
+all as a 404), and stream resolution against real Postgres rows all pass in
+`test/http/`; `/play/:fileId`'s 302 redirect and `play_log` insert are
+verified against a mocked TorBox response (no real request ever needs to
+succeed for the redirect logic itself to be correct), and a dedicated test
+asserts `TORBOX_API_KEY` never appears in any response body or header.
+**Still needs the repo owner**: a real deployment reachable from the
+internet (`PUBLIC_BASE`, i.e. the Cloudflare Tunnel), a real `ADDON_TOKEN`,
+and installing the resulting manifest URL in real Stremio and AIOStreams to
+confirm actual playback of a `.ts` and an `.mp4` file — that's Milestone 3's
+actual, stated success criterion, and isn't achievable from an isolated
+build sandbox. See `docs/milestones.md` §3.
+
 ## Setup
 
 ```
-cp .env.example .env   # fill in TORBOX_API_KEY at minimum
+cp .env.example .env   # fill in TORBOX_API_KEY, ADDON_TOKEN, PUBLIC_BASE at minimum
 docker compose up
 ```
 
-This builds the app image, starts Postgres, runs migrations, and does one
-ingest run (logs a summary, then exits — see docker-compose.yml's comments;
-this changes shape once Milestone 3/6 land).
+This builds the app image, starts Postgres, runs migrations, and starts the
+addon server listening on `PORT` (default 3000) — it stays running (see
+docker-compose.yml's comments). Ingest is still manual until Milestone 6's
+scheduler lands:
+
+```
+docker compose exec app npm run ingest
+```
 
 ### Deploying via Portainer (or Swarm, or any other UI-managed stack)
 
 No `.env` file needed either way — every variable `app` reads comes through
 plain `${VAR}` interpolation (`TORBOX_API_KEY`, `DATABASE_URL`,
-`TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`), not `env_file:`, specifically so a
+`TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`, `ADDON_TOKEN`, `PUBLIC_BASE`,
+`PORT`, `NOT_WEB_READY_EXTENSIONS`), not `env_file:`, specifically so a
 stack UI's own "Environment variables" section can supply them.
 
 **Option A — no clone at all.** `.github/workflows/docker-publish.yml`
@@ -96,7 +118,14 @@ the stack's **Environment variables** add at minimum:
 
 ```
 TORBOX_API_KEY=<your real key>
+ADDON_TOKEN=<generate with: openssl rand -hex 32>
+PUBLIC_BASE=<https://your-cloudflare-tunnel-hostname>
 ```
+
+`PUBLIC_BASE` is what gets embedded in every stream URL handed to Stremio,
+so it needs to actually be reachable from wherever Stremio/AIOStreams run —
+the Cloudflare Tunnel hostname in production, pointed at the stack's
+exposed port (`PORT`, default 3000).
 
 If the package is private (GHCR defaults new packages to the repo's
 visibility), either make it public under the repo's *Packages* tab, or add
@@ -109,14 +138,15 @@ repository method, this repo/branch, `docker-compose.yml` as the compose
 path) at it instead; Portainer clones the repo and builds the image itself
 on `docker compose up`. Same environment variables as Option A.
 
-Either way, everything except `TORBOX_API_KEY` (`DATABASE_URL`,
-`POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`)
-has a matching default already in the compose file and only needs
-overriding if you want non-default Postgres credentials — in which case
-set `POSTGRES_USER`/`PASSWORD`/`DB` *and* a `DATABASE_URL` that matches
-them, since the app connects with the latter, not the three parts. Leaving
-`TORBOX_API_KEY` unset deploys fine but the container exits immediately
-with a clear "TORBOX_API_KEY is required" error (`src/config.ts`) — check
+Either way, everything except `TORBOX_API_KEY`, `ADDON_TOKEN`, and
+`PUBLIC_BASE` (`DATABASE_URL`, `POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`,
+`TORBOX_REQUEST_DELAY_MS`, `PORT`, `NOT_WEB_READY_EXTENSIONS`) has a
+matching default already in the compose file and only needs overriding if
+you want non-default Postgres credentials — in which case set
+`POSTGRES_USER`/`PASSWORD`/`DB` *and* a `DATABASE_URL` that matches them,
+since the app connects with the latter, not the three parts. Leaving any of
+the three required variables unset deploys fine but the container exits
+immediately with a clear "... is required" error (`src/config.ts`) — check
 the container logs.
 
 ## Local development (without Docker)
@@ -125,7 +155,7 @@ the container logs.
 npm install
 npm run migrate:up      # apply migrations to whatever DATABASE_URL points at
 npm run ingest           # one ingest run
-npm run dev               # same, but re-runs on file changes are not wired up (Milestone 1 has no server loop yet)
+npm run dev               # starts the addon server against DATABASE_URL; no file-watch wired up, re-run manually after edits
 ```
 
 ## Milestone 2: hand-written rules
@@ -144,6 +174,44 @@ expands them, and writes `mappings`. `test/ingest/materialize.test.ts` does
 the same thing against `TEST_DATABASE_URL` and asserts the result is exactly
 right — that's the automated version of "verify expandRule materialises
 correct mappings" from the build order.
+
+## Milestone 3: the addon
+
+Three routes, all under `/:token` (§5.5 — `ADDON_TOKEN`, constant-time
+compared on every request; a wrong or missing token is a 404, not 401/403):
+
+```
+GET /:token/manifest.json
+GET /:token/stream/series/:imdbId:season:episode.json
+GET /:token/play/:fileId              -- 302 to a signed TorBox URL
+```
+
+With the server running (`npm run dev` or `docker compose up`) and a real
+`ADDON_TOKEN`:
+
+```
+curl http://localhost:3000/$ADDON_TOKEN/manifest.json
+```
+
+The stream route resolves by IMDb id, which the Milestone 2 seed doesn't
+set (those are fabricated example hashes, not real library data) — to try
+it locally, point one of the seeded titles at a real `tt...` id first:
+
+```
+psql "$DATABASE_URL" -c "update titles set imdb_id = 'tt0000000' where name_ru = 'Сокровища императора'"
+curl http://localhost:3000/$ADDON_TOKEN/stream/series/tt0000000:3:1.json
+```
+
+`/play/:fileId` (`fileId` from a stream response's `url`) 302s to a real,
+signed TorBox CDN URL and never to a URL containing `TORBOX_API_KEY` — that
+redirect is the entire point of the route (§5.5). `test/http/` covers all
+three routes without needing a live deployment: manifest shape, token auth,
+stream resolution against real Postgres rows, and the play redirect against
+a mocked TorBox response.
+
+Installing the manifest URL in real Stremio/AIOStreams and confirming
+actual playback needs a real deployment reachable from those clients — see
+the Status section above and `docs/milestones.md` §3.
 
 ## Testing
 
