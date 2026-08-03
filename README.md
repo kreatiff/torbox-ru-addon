@@ -78,6 +78,32 @@ This builds the app image, starts Postgres, runs migrations, and does one
 ingest run (logs a summary, then exits — see docker-compose.yml's comments;
 this changes shape once Milestone 3/6 land).
 
+### Deploying via Portainer (or Swarm, or any other UI-managed stack)
+
+No `.env` file needed — `docker-compose.yml`'s `app` service reads every
+variable through plain `${VAR}` interpolation (`TORBOX_API_KEY`,
+`DATABASE_URL`, `TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`), not `env_file:`,
+specifically so a stack UI's own "Environment variables" section can supply
+them — those UIs deploy straight from this repo and have no way to load a
+gitignored file that was never pushed to it.
+
+Point a Portainer *Stack* (Git repository method, this repo/branch,
+`docker-compose.yml` as the compose path) at it, then under the stack's
+**Environment variables** add at minimum:
+
+```
+TORBOX_API_KEY=<your real key>
+```
+
+Everything else (`DATABASE_URL`, `POSTGRES_USER`/`PASSWORD`/`DB`,
+`LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`) has a matching default baked into
+`docker-compose.yml` and only needs overriding if you want non-default
+Postgres credentials — in which case set `POSTGRES_USER`/`PASSWORD`/`DB`
+*and* a `DATABASE_URL` that matches them, since the app connects with the
+latter, not the three parts. Leaving `TORBOX_API_KEY` unset deploys fine
+but the container exits immediately with a clear "TORBOX_API_KEY is
+required" error (`src/config.ts`) — check the container logs.
+
 ## Local development (without Docker)
 
 ```

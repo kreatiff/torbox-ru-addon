@@ -28,8 +28,17 @@ services:
     # Switches to a long-running server + internal scheduler in Milestone
     # 3/6 — restart policy and a ports mapping belong here once that lands.
     restart: 'no'
-    env_file:
-      - .env
+    environment:
+      # Explicit (not env_file:) so this works the same whether the values
+      # come from a local .env (Compose still auto-loads one from the
+      # project directory if present — nothing else here changes), from
+      # the shell running `docker compose up`, or from a stack's own
+      # "Environment variables" UI (Portainer, Swarm, etc.), none of which
+      # can load a gitignored .env file that was never pushed to the repo.
+      TORBOX_API_KEY: ${TORBOX_API_KEY}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://torbox:changeme@postgres:5432/torbox_ru}
+      TORBOX_REQUEST_DELAY_MS: ${TORBOX_REQUEST_DELAY_MS:-250}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
