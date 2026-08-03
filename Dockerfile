@@ -4,6 +4,8 @@
 
 FROM node:22-alpine AS build
 WORKDIR /app
+
+# Build backend
 COPY package.json package-lock.json ./
 # --ignore-scripts: devDependencies pull in esbuild/rollup (via vitest, tsx) purely for
 # local dev/test — this stage only ever runs `tsc`. Their postinstall scripts exec a
@@ -14,6 +16,12 @@ RUN npm ci --ignore-scripts
 COPY tsconfig.base.json tsconfig.json ./
 COPY src ./src
 RUN npm run build
+
+# Build frontend
+COPY ui/package.json ui/package-lock.json ./ui/
+RUN cd ui && npm ci
+COPY ui ./ui
+RUN cd ui && npm run build
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

@@ -76,6 +76,7 @@ export const titleRowSchema = z.object({
   name_en: z.string().nullable(),
   year: z.number().int().nullable(),
   aliases: z.array(z.string()),
+  poster_url: z.string().nullable().optional(),
 });
 export type TitleRow = z.infer<typeof titleRowSchema>;
 
@@ -86,3 +87,18 @@ export const playLogRowSchema = z.object({
   user_agent: z.string().nullable(),
 });
 export type PlayLogRow = z.infer<typeof playLogRowSchema>;
+
+export const providerSeasonRowSchema = z.object({
+  title_id: z.string(),
+  season: z.number().int(),
+  source: z.enum(['tmdb', 'tvdb']),
+  episode_count: z.number().int(),
+  episodes: z.array(
+    z.object({
+      episode: z.number().int(),
+      air_date: z.string().nullable().optional(),
+    }),
+  ),
+  fetched_at: z.date(),
+});
+export type ProviderSeasonRow = z.infer<typeof providerSeasonRowSchema>;

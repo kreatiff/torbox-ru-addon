@@ -15,6 +15,10 @@ const envSchema = z.object({
   // per-file computed flag with an env override" -- this makes the
   // computation itself configurable rather than a blunt global switch.
   NOT_WEB_READY_EXTENSIONS: z.string().default('ts'),
+  // --- Milestone 4 (src/ui, admin UI & metadata) ---
+  TMDB_API_KEY: z.string().optional(),
+  ADMIN_USER: z.string().default('admin'),
+  ADMIN_PASS: z.string().default('admin'),
 });
 
 function loadConfig() {
@@ -37,6 +41,9 @@ function loadConfig() {
     notWebReadyExtensions: parsed.data.NOT_WEB_READY_EXTENSIONS.split(',')
       .map((ext) => ext.trim().toLowerCase())
       .filter((ext) => ext.length > 0),
+    tmdbApiKey: parsed.data.TMDB_API_KEY,
+    adminUser: parsed.data.ADMIN_USER,
+    adminPass: parsed.data.ADMIN_PASS,
   };
 }
 

@@ -37,7 +37,57 @@ export async function getRuleById(id: string): Promise<Rule | undefined> {
   return row ? toRule(ruleRowSchema.parse(row)) : undefined;
 }
 
+export async function getRuleByTorrentAndSeason(
+  torrentHash: string,
+  season: number,
+): Promise<Rule | undefined> {
+  const result = await pool.query(
+    'select * from rules where torrent_hash = $1 and season = $2',
+    [torrentHash, season],
+  );
+  const row = result.rows[0];
+  return row ? toRule(ruleRowSchema.parse(row)) : undefined;
+}
+
 export async function listRules(): Promise<Rule[]> {
   const result = await pool.query('select * from rules order by created_at');
   return result.rows.map((row) => toRule(ruleRowSchema.parse(row)));
+}
+
+export async function upsertRule(
+  ruleData: Omit<Rule, 'id'>,
+): Promise<Rule> {
+  const result = await pool.query(
+    `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     on conflict (torrent_hash, season)
+     do update set
+       title_id = excluded.title_id,
+       numbering = excluded.numbering,
+       sort = excluded.sort,
+       start_episode = excluded.start_episode,
+       absolute_offset = excluded.absolute_offset,
+       exceptions = excluded.exceptions,
+       confidence = excluded.confidence,
+       source = excluded.source
+       -- created_at is intentionally left unchanged: it records when the rule was first created
+     returning *`,
+    [
+      ruleData.torrentHash,
+      ruleData.titleId,
+      ruleData.season,
+      ruleData.numbering,
+      ruleData.sort,
+      ruleData.startEpisode,
+      ruleData.absoluteOffset,
+      JSON.stringify(ruleData.exceptions),
+      ruleData.confidence,
+      ruleData.source,
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error('Failed to upsert rule');
+  }
+  return toRule(ruleRowSchema.parse(row));
 }
