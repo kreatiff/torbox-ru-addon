@@ -1,8 +1,8 @@
 # Milestone status
 
 Status against the locked build order (`torbox-ru-addon-spec.md` §6 — "do not skip ahead").
-Updated as of Milestone 2 shipping. See [`decisions.md`](./decisions.md) for the reasoning
-behind specific choices, and [`../README.md`](../README.md) for how to actually run any of this.
+See [`decisions.md`](./decisions.md) for the reasoning behind specific choices, and
+[`../README.md`](../README.md) for how to actually run any of this.
 
 ## 1. Ingest only — ✅ done
 
@@ -139,11 +139,11 @@ play in a real client — that's this milestone's exact stated success criterion
 above stops just short of it (real resolution to the correct file is confirmed; real video
 decode is not yet explicitly confirmed).
 
-## 4. Labeller UI — ✅ built and reviewed; not yet merged to `dev`
+## 4. Labeller UI — ✅ done, merged to `dev`
 
 > Queue, labeller, preview table.
 
-Built on the `milestone4` branch (not by the same agent that wrote everything above): a React +
+Built on a `milestone4` branch (not by the same agent that wrote everything above): a React +
 Vite admin UI (`ui/`) with Queue/Labeller/Library/Health tabs, mounted at `/admin` behind HTTP
 Basic Auth; a JSON API (`/api/queue`, `/api/torrents/:hash`, `/api/rules`, `/api/library`,
 `/api/health`, `/api/titles/search`, `/api/ingest/run`), also Basic-Auth-gated, independently of
@@ -152,6 +152,10 @@ formats) per the plan document's §3.6 proposal; and an additive `provider_seaso
 (already tracked above under "Schema additions"). The Labeller view imports `expandRule` and its
 types directly from `src/resolve/` for a live client-side mapping preview, per the plan's
 explicit "no `src/shared/`" design.
+
+Note this also means the Health screen named in Milestone 6 below is **already built** — it
+shipped as one of this UI's four tabs, ahead of `node-cron` scheduling and the webhook
+notification boundary, which are the only pieces of Milestone 6 still unbuilt (see below).
 
 **Reviewed and fixed before merge** (a second pass, on the same branch, not a rebuild): the
 initial version had `ADMIN_USER`/`ADMIN_PASS` defaulting to `admin`/`admin` with no compose
@@ -193,9 +197,27 @@ fixes from the same pass:
   paths), `/api/torrents/:hash`, `/api/library`, and `/api/health` — suite grew from 76 to 84
   tests, all passing.
 
-**Not yet done:** merging `milestone4` into `dev`. Needs `TMDB_API_KEY` from the repo owner to
-actually exercise the show picker for real (tests mock the TMDB client; nothing has called the
-real TMDB API yet).
+**Follow-up merged separately, after Milestone 4 itself:** already-mapped rules are now editable
+from the Library view, not just creatable fresh from the Queue — each rule listed under a season
+has an **Edit** button that opens the Labeller pre-filled with that rule's season, numbering,
+sort, start episode, exceptions, and show. `GET /api/torrents/:hash` returns any existing rules
+for that hash (title joined in) to support the pre-fill; `POST /api/rules` takes an optional
+`ruleId`, and since `rules`' unique constraint is `(torrent_hash, season)`, moving a rule to a
+different season deletes the old row first (cascading to its mappings) rather than leaving it
+behind as an orphan. Verified end to end in a real browser: pre-fill, an in-place edit, and a
+cross-season edit, the last one double-checked directly against Postgres to confirm no orphaned
+row survived. Building this also surfaced and fixed a real, previously-unnoticed bug in
+`admin/index.ts`: local dev mode (`npm run dev`, outside Docker) always served the Vite _source_
+tree instead of the real `dist/ui` build, even after running `npm run build` — see `decisions.md`.
+
+**Known gap, not yet built:** no way to delete a rule/mapping for a torrent that's gone from
+TorBox. The Health tab's "Gone Torrents" and "Dangling Mappings" numbers are read-only
+diagnostics with no action attached — `rulesRepo.deleteRule` (added for the season-change case
+above) already does the necessary cascade, just nothing in the API or UI calls it for this case
+yet.
+
+**Still needs the repo owner:** a real `TMDB_API_KEY` to actually exercise the show picker for
+real (tests mock the TMDB client; nothing has called the real TMDB API yet).
 
 ## 5. Auto-proposal engine — ⏳ not started
 
@@ -209,24 +231,34 @@ in earnest: the three-tier confidence-materialisation reading (§3.3 of the plan
 confidence formula (§3.4) — both flagged as consequential given the spec's own warning (§9)
 that a confident-but-wrong mapping is the worst failure mode in the system.
 
-## 6. Health screen, ingest scheduling, notifications — ⏳ not started
+**Detailed build plan:** see [`docs/milestone5-plan.md`](./milestone5-plan.md) — module-by-module
+breakdown, the exact sign-offs still blocking (§3.3/§3.4 above), fixture/test plan, and how this
+wires into the ingest pipeline and the Queue/Labeller UI.
+
+## 6. Health screen, ingest scheduling, notifications — ⏳ partially done
 
 > (no additional quote — §6 names this milestone in four words)
 
-Not started. `node-cron` scheduling, the webhook notification boundary (§8), and the Health
-screen (§5.6) all land here, on top of whatever the Labeller UI (Milestone 4) establishes for
-the admin surface.
+The Health screen (§5.6) part is **already built** — it shipped as one of Milestone 4's four
+admin tabs (see above), ahead of this milestone, since the Labeller UI needed _some_ admin
+surface to attach it to. What's still not started: `node-cron` ingest scheduling and the webhook
+notification boundary (§8). Also still missing from the Health screen itself: it can report gone
+torrents and dangling mappings, but has no action to actually delete a stale rule/mapping for one
+— see Milestone 4's "known gap" note above.
 
 ---
 
-**Overall:** 3 of 6 milestones done and merged to `dev`, each verified as thoroughly as an
-isolated build sandbox allows, and Milestone 3 has since gone further than that: live-installed
-against the repo owner's real deployment, real TorBox account, and real clients (AIOStreams +
-Nuvio), which surfaced and fixed two genuine gaps (a TMDB-vs-IMDb id mismatch, and a
-production-image operational note on triggering ingest manually) and confirmed two real shows
-resolve correctly end to end. Milestone 1's own real-ARM64-host criterion has also been satisfied
-for real: the repo owner deployed the GHCR-published image via Portainer on the actual target
-host and a real ingest ran cleanly (210 torrents, 2067 files, clean exit). The one thing left on
-Milestone 3 isn't code — it's the repo owner actually pressing play and confirming real video
-decode, the last unconfirmed piece of its stated success criterion. Milestone 4 is built and
-reviewed on its own branch (see above) but not yet merged.
+**Overall:** 4 of 6 milestones done and merged to `dev`, each verified as thoroughly as an
+isolated build sandbox allows, and Milestones 3 and 4 have since gone further than that. Milestone
+3 was live-installed against the repo owner's real deployment, real TorBox account, and real
+clients (AIOStreams + Nuvio), which surfaced and fixed two genuine gaps (a TMDB-vs-IMDb id
+mismatch, and a production-image operational note on triggering ingest manually) and confirmed
+two real shows resolve correctly end to end. Milestone 1's own real-ARM64-host criterion has also
+been satisfied for real: the repo owner deployed the GHCR-published image via Portainer on the
+actual target host and a real ingest ran cleanly (210 torrents, 2067 files, clean exit). The one
+thing left on Milestone 3 isn't code — it's the repo owner actually pressing play and confirming
+real video decode, the last unconfirmed piece of its stated success criterion. Milestone 4
+(reviewed and fixed before merge, see above) has since gained a follow-up too: already-mapped
+rules are now editable from the Library view, not just creatable fresh. Milestone 6's Health
+screen already exists as one of Milestone 4's tabs, ahead of schedule; scheduling and
+notifications are what's left of it.
