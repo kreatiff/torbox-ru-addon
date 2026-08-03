@@ -6,7 +6,8 @@ non-Scene naming) to `(series, season, episode)` streams. Full design in
 
 Project history, every decision made, and per-milestone status live in
 [`docs/`](./docs/) ([history](./docs/history.md) ·
-[decisions](./docs/decisions.md) · [milestones](./docs/milestones.md)) —
+[decisions](./docs/decisions.md) · [milestones](./docs/milestones.md) ·
+[Milestone 5 plan](./docs/milestone5-plan.md)) —
 kept there instead of the GitHub wiki, which this build couldn't get write
 access to (see `docs/history.md`).
 

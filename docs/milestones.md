@@ -231,6 +231,10 @@ in earnest: the three-tier confidence-materialisation reading (§3.3 of the plan
 confidence formula (§3.4) — both flagged as consequential given the spec's own warning (§9)
 that a confident-but-wrong mapping is the worst failure mode in the system.
 
+**Detailed build plan:** see [`docs/milestone5-plan.md`](./milestone5-plan.md) — module-by-module
+breakdown, the exact sign-offs still blocking (§3.3/§3.4 above), fixture/test plan, and how this
+wires into the ingest pipeline and the Queue/Labeller UI.
+
 ## 6. Health screen, ingest scheduling, notifications — ⏳ partially done
 
 > (no additional quote — §6 names this milestone in four words)
