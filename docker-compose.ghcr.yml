@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16
+    platform: linux/arm64
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-torbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-torbox_ru}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-torbox} -d ${POSTGRES_DB:-torbox_ru}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not exposed on purpose: only `app` needs to reach Postgres, over the
+    # compose-internal network. Nothing here should be reachable from the
+    # Cloudflare Tunnel — that only points at `app` (from Milestone 3 on).
+
+  app:
+    # Published by .github/workflows/docker-publish.yml on every push to
+    # dev. No `build:` here on purpose -- this file is meant to be pasted
+    # straight into Portainer (or run with `docker compose -f
+    # docker-compose.ghcr.yml up -d`) without cloning the repo at all.
+    image: ghcr.io/kreatiff/torbox-ru-addon:latest
+    platform: linux/arm64
+    # Milestone 1 shape: one ingest run per `docker compose up`, then exit.
+    # Switches to a long-running server + internal scheduler in Milestone
+    # 3/6 — restart policy and a ports mapping belong here once that lands.
+    restart: 'no'
+    environment:
+      TORBOX_API_KEY: ${TORBOX_API_KEY}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://torbox:changeme@postgres:5432/torbox_ru}
+      TORBOX_REQUEST_DELAY_MS: ${TORBOX_REQUEST_DELAY_MS:-250}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

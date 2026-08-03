@@ -80,29 +80,44 @@ this changes shape once Milestone 3/6 land).
 
 ### Deploying via Portainer (or Swarm, or any other UI-managed stack)
 
-No `.env` file needed — `docker-compose.yml`'s `app` service reads every
-variable through plain `${VAR}` interpolation (`TORBOX_API_KEY`,
-`DATABASE_URL`, `TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`), not `env_file:`,
-specifically so a stack UI's own "Environment variables" section can supply
-them — those UIs deploy straight from this repo and have no way to load a
-gitignored file that was never pushed to it.
+No `.env` file needed either way — every variable `app` reads comes through
+plain `${VAR}` interpolation (`TORBOX_API_KEY`, `DATABASE_URL`,
+`TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`), not `env_file:`, specifically so a
+stack UI's own "Environment variables" section can supply them.
 
-Point a Portainer *Stack* (Git repository method, this repo/branch,
-`docker-compose.yml` as the compose path) at it, then under the stack's
-**Environment variables** add at minimum:
+**Option A — no clone at all.** `.github/workflows/docker-publish.yml`
+builds and pushes `ghcr.io/kreatiff/torbox-ru-addon:latest` (and a
+`:sha-<short>` tag) on every push to `dev`. Copy
+[`docker-compose.ghcr.yml`](./docker-compose.ghcr.yml)'s contents straight
+into Portainer's *Stacks → Add stack → Web editor* (no git repository
+needed), or run it directly with
+`docker compose -f docker-compose.ghcr.yml up -d` on any host. Then under
+the stack's **Environment variables** add at minimum:
 
 ```
 TORBOX_API_KEY=<your real key>
 ```
 
-Everything else (`DATABASE_URL`, `POSTGRES_USER`/`PASSWORD`/`DB`,
-`LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`) has a matching default baked into
-`docker-compose.yml` and only needs overriding if you want non-default
-Postgres credentials — in which case set `POSTGRES_USER`/`PASSWORD`/`DB`
-*and* a `DATABASE_URL` that matches them, since the app connects with the
-latter, not the three parts. Leaving `TORBOX_API_KEY` unset deploys fine
-but the container exits immediately with a clear "TORBOX_API_KEY is
-required" error (`src/config.ts`) — check the container logs.
+If the package is private (GHCR defaults new packages to the repo's
+visibility), either make it public under the repo's *Packages* tab, or add
+a registry credential in Portainer (*Registries*) or run
+`docker login ghcr.io -u <github-user>` on the host first, using a PAT with
+`read:packages`.
+
+**Option B — build from source.** Point a Portainer *Stack* (Git
+repository method, this repo/branch, `docker-compose.yml` as the compose
+path) at it instead; Portainer clones the repo and builds the image itself
+on `docker compose up`. Same environment variables as Option A.
+
+Either way, everything except `TORBOX_API_KEY` (`DATABASE_URL`,
+`POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`)
+has a matching default already in the compose file and only needs
+overriding if you want non-default Postgres credentials — in which case
+set `POSTGRES_USER`/`PASSWORD`/`DB` *and* a `DATABASE_URL` that matches
+them, since the app connects with the latter, not the three parts. Leaving
+`TORBOX_API_KEY` unset deploys fine but the container exits immediately
+with a clear "TORBOX_API_KEY is required" error (`src/config.ts`) — check
+the container logs.
 
 ## Local development (without Docker)
 
