@@ -4,6 +4,12 @@ Self-hosted Stremio addon mapping a TorBox cloud library (Russian TV, messy
 non-Scene naming) to `(series, season, episode)` streams. Full design in
 [`torbox-ru-addon-spec.md`](./torbox-ru-addon-spec.md).
 
+Project history, every decision made, and per-milestone status live in
+[`docs/`](./docs/) ([history](./docs/history.md) ·
+[decisions](./docs/decisions.md) · [milestones](./docs/milestones.md)) —
+kept there instead of the GitHub wiki, which this build couldn't get write
+access to (see `docs/history.md`).
+
 ## Status
 
 **Milestones 1-2 of 6 done (locked build order, spec §6).** Ingest (TorBox
