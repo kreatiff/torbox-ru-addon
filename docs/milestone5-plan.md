@@ -58,19 +58,26 @@ already moot (resolved by what shipped); two are the real gate:
    Nothing to re-litigate; only `parsed`'s own cascade (§3.5) is new work.
 2. **`provider_seasons` schema addition (§3.2) — de facto resolved.** Implemented and in active
    use since Milestone 4 (TMDB season caching in `POST /api/rules`). Nothing to re-litigate.
-3. **Confidence materialisation: the three-way split (§3.3) — ✅ confirmed.** High → insert
-   rule + `rebuildMappings` immediately (live, no flag); medium → insert + `rebuildMappings` but
-   flag `⚠` in the stream description; positional-fallback-only → insert the rule but **withhold**
-   `rebuildMappings` (inert — shows in Queue, produces zero streams until a human accepts it).
-   The positional-fallback-only tier is a **cascade-stage gate**, not a score floor: it fires
-   when stage 5 (positional/natural-sort fallback) was the only cascade stage that matched,
-   regardless of the final score. See `docs/decisions.md` §"Milestone 5 pre-implementation
-   sign-offs".
+3. **Confidence materialisation: the three-way split (§3.3) — ✅ confirmed, gate set widened.**
+   High → insert rule + `rebuildMappings` immediately (live, no flag); medium → insert +
+   `rebuildMappings` but flag `⚠` in the stream description; **any of three categorical gates
+   firing** → insert the rule but **withhold** `rebuildMappings` (inert — shows in Queue,
+   produces zero streams until a human accepts it). Originally scoped as a single
+   positional-fallback gate; a review pass found it didn't catch a wrong-show title match or a
+   self-contradicting `X из Y` count, both at least as dangerous — see `docs/decisions.md`
+   §"Milestone 5 pre-implementation sign-offs" for the full gate definitions.
 4. **The confidence formula itself (§3.4) — ✅ confirmed (shape locked; thresholds tuned during
-   implementation).** Weighted signal sum, normalised over _applicable_ signals only; positional
-   floor evaluated categorically first; HIGH requires score ≥ 0.75 **and** at least one
-   high-weight signal fired; MEDIUM requires score ≥ 0.45 (and not positional-floor). Full signal
-   weight table in `docs/decisions.md` §"Milestone 5 pre-implementation sign-offs".
+   implementation).** Three categorical gates evaluated first (no confident title match; `X из
+Y` present and mismatched; positional fallback used for a majority of files) — any one firing
+   forces QUEUE regardless of score. For proposals that pass all three: a weighted signal sum,
+   normalised over _applicable_ signals only and clamped to [0, 1]; HIGH requires score ≥ 0.75
+   **and** at least one high-weight signal fired; MEDIUM requires score ≥ 0.45. The
+   provider-episode-count signal only applies when the torrent doesn't declare a partial `X из
+Y` (a correctly-labelled partial upload — the real Сокровища императора case — would
+   otherwise never be able to satisfy it, capping its score below a full-season torrent's for no
+   good reason); the positional-fallback penalty scales with the fraction of files affected
+   rather than being a flat deduction. Full signal weight table and reasoning in
+   `docs/decisions.md` §"Milestone 5 pre-implementation sign-offs".
 
 **Both gate items confirmed.** Step 4 (`src/resolve/confidence.ts`) is unblocked; steps 1–3 can
 proceed in parallel.
@@ -229,18 +236,21 @@ refresh webdav → fetch mylist → upsert torrents → fetch files → mark abs
 "Unruled torrents" = active torrents with no existing `rules` row — the same set `GET /api/queue`
 already selects (`where t.status = 'active' and r.id is null`). For each, run `proposeRule`
 against its files and a title match (search by cleaned-up torrent name against TMDB, reusing
-`searchTitles`), then `upsertRule` with the result. Per the sign-off in step 4/item 3: high and
-medium confidence also trigger `rebuildMappingsForRule` immediately (medium still flagged `⚠`
-downstream via the stream description, which already reads `rules.confidence` for exactly this);
-positional-fallback-only inserts the rule but does **not** rebuild — it shows up in the Queue as
-before, just now backed by a real proposal instead of the placeholder regex.
+`searchTitles`, per categorical gate #1's exact/unambiguous-match rule — see `docs/decisions.md`),
+then `upsertRule` with the result. Per the sign-off in step 4/item 3: high and medium confidence
+also trigger `rebuildMappingsForRule` immediately (medium still flagged `⚠` downstream via the
+stream description, which already reads `rules.confidence` for exactly this); if **any** of the
+three categorical gates fired (no confident title match, `X из Y` mismatch, or majority-positional
+fallback), the rule is inserted but **not** rebuilt — it shows up in the Queue as before, just now
+backed by a real proposal instead of the placeholder regex, and its `proposal_reason` states which
+gate (if any) fired or what the scored tier was.
 
-Title matching itself (torrent name → title candidate) is the one piece of glue not fully
-specified anywhere above — needs a strategy (search TMDB by the cleaned torrent name, take the
-top result above some similarity bar, else leave `titleId` unset and force manual review through
-the Queue same as today). Worth scoping tightly: this doesn't need to be good, just needs to
-correctly _decline_ to guess when it's not confident, consistent with the whole milestone's
-governing principle.
+Title matching itself (torrent name → title candidate) now has a concrete rule (categorical gate
+#1 in `docs/decisions.md`), not just a strategy sketch: exact/near-exact and unambiguous, or reuse
+an already-confirmed `titles` row, else leave `titleId` unset and force manual review through the
+Queue same as today. Worth keeping the matching itself simple (string comparison, not a fuzzy
+NLP match) — the gate's job is to correctly _decline_ to guess when it's not confident, not to be
+clever, consistent with the whole milestone's governing principle.
 
 ### Step 6 — Replace the Queue/Labeller placeholders
 
