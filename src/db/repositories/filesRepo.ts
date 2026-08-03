@@ -59,3 +59,11 @@ export async function upsertFiles(files: UpsertFileInput[]): Promise<File[]> {
   );
   return result.rows.map((row) => toFile(fileRowSchema.parse(row)));
 }
+
+export async function listVideoFilesForTorrent(torrentHash: string): Promise<File[]> {
+  const result = await pool.query(
+    'select * from files where torrent_hash = $1 and is_video = true order by id',
+    [torrentHash],
+  );
+  return result.rows.map((row) => toFile(fileRowSchema.parse(row)));
+}

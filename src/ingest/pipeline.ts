@@ -5,6 +5,7 @@ import type { TorboxFile, TorboxTorrent } from '../torbox/schemas.js';
 import { listKnownHashes, markAbsentGone, upsertTorrent } from '../db/repositories/torrentsRepo.js';
 import { upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
 import { isVideoFile } from './isVideoFile.js';
+import { rebuildAllMappings } from './materialize.js';
 
 export interface IngestSummary {
   webdavRefreshed: boolean;
@@ -13,6 +14,8 @@ export interface IngestSummary {
   torrentsMarkedGone: number;
   filesUpserted: number;
   perIdFetches: number;
+  rulesRebuilt: number;
+  rulesFailed: number;
 }
 
 function toUpsertFileInputs(torrentHash: string, files: TorboxFile[]): UpsertFileInput[] {
@@ -26,11 +29,13 @@ function toUpsertFileInputs(torrentHash: string, files: TorboxFile[]): UpsertFil
 }
 
 /**
- * Milestone 1 scope only: refresh -> fetch -> upsert torrents -> fetch files
- * for new hashes -> mark absent gone. Deliberately stops there — proposing
- * rules and rebuilding mappings needs src/resolve, which doesn't exist yet
- * (Milestone 5, per the locked build order). Not on a schedule yet either
- * (Milestone 6); call this directly.
+ * Milestone 1+2 scope: refresh -> fetch -> upsert torrents -> fetch files
+ * for new hashes -> mark absent gone -> rebuild mappings for every existing
+ * rule. "Propose rules for unruled torrents" (§5.2) still doesn't run here —
+ * that needs the extractor cascade (Milestone 5) — so the rebuild step only
+ * ever processes rules that already exist: hand-inserted ones for now
+ * (Milestone 2), UI-authored ones from Milestone 4 on. Not on a schedule yet
+ * either (Milestone 6); call this directly.
  */
 export async function runIngest(): Promise<IngestSummary> {
   const webdavRefreshed = await refreshWebdav();
@@ -100,6 +105,11 @@ export async function runIngest(): Promise<IngestSummary> {
     );
   }
 
+  const { rulesProcessed: rulesRebuilt, rulesFailed } = await rebuildAllMappings();
+  if (rulesRebuilt > 0 || rulesFailed > 0) {
+    logger.info({ rulesRebuilt, rulesFailed }, 'mappings rebuilt for existing rules');
+  }
+
   const summary: IngestSummary = {
     webdavRefreshed,
     torrentsSeen: mylist.length,
@@ -107,6 +117,8 @@ export async function runIngest(): Promise<IngestSummary> {
     torrentsMarkedGone,
     filesUpserted,
     perIdFetches: needingFetch.length,
+    rulesRebuilt,
+    rulesFailed,
   };
   logger.info(summary, 'ingest run complete');
   return summary;

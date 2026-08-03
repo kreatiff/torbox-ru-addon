@@ -138,4 +138,41 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     const status = await pool.query('select status from torrents where hash = $1', ['hash-d']);
     expect(status.rows[0].status).toBe('active');
   });
+
+  it('rebuilds mappings for a pre-existing rule on every run', async () => {
+    stubTorboxApi({
+      mylist: [
+        {
+          id: 6,
+          hash: 'hash-e',
+          name: 'Show',
+          files: [
+            { id: 60, name: '01.mp4', size: 1 },
+            { id: 61, name: '02.mp4', size: 1 },
+          ],
+        },
+      ],
+    });
+    await runIngest();
+
+    const title = await pool.query(`insert into titles (name_ru) values ('Show') returning id`);
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('hash-e', $1, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [title.rows[0].id],
+    );
+
+    const summary = await runIngest();
+    expect(summary.rulesRebuilt).toBe(1);
+    expect(summary.rulesFailed).toBe(0);
+
+    const mappings = await pool.query(
+      'select season, episode from mappings where rule_id = $1 order by episode',
+      [rule.rows[0].id],
+    );
+    expect(mappings.rows).toEqual([
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+    ]);
+  });
 });

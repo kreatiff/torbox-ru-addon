@@ -2,10 +2,9 @@ import { z } from 'zod';
 
 // Raw DB row shapes (snake_case, matching the actual columns exactly) — the
 // zod-at-the-read-boundary layer that stands in for an ORM's type safety
-// without maintaining a second schema representation. Only torrents/files are
-// defined here for now (Milestone 1 scope); titles/rules/mappings/play_log/
+// without maintaining a second schema representation. titles/play_log/
 // provider_seasons get their row schemas added alongside the repositories
-// that need them.
+// that need them (Milestone 4+).
 
 export const torrentStatusSchema = z.enum(['active', 'gone']);
 
@@ -33,3 +32,37 @@ export const fileRowSchema = z.object({
   is_video: z.boolean(),
 });
 export type FileRow = z.infer<typeof fileRowSchema>;
+
+export const ruleExceptionSchema = z.union([
+  z.literal('ignore'),
+  z.object({ season: z.number().int(), episode: z.number().int() }),
+]);
+
+export const ruleNumberingSchema = z.enum(['sequential', 'parsed', 'continuous', 'manual']);
+export const ruleSortSchema = z.enum(['natural', 'path']);
+export const ruleSourceSchema = z.enum(['auto', 'manual']);
+
+export const ruleRowSchema = z.object({
+  id: z.string(),
+  torrent_hash: z.string().nullable(),
+  title_id: z.string().nullable(),
+  season: z.number().int(),
+  numbering: ruleNumberingSchema,
+  sort: ruleSortSchema,
+  start_episode: z.number().int(),
+  absolute_offset: z.number().int().nullable(),
+  exceptions: z.record(z.string(), ruleExceptionSchema),
+  confidence: z.number(),
+  source: ruleSourceSchema,
+  created_at: z.date(),
+});
+export type RuleRow = z.infer<typeof ruleRowSchema>;
+
+export const mappingRowSchema = z.object({
+  file_id: z.number().int(),
+  title_id: z.string().nullable(),
+  season: z.number().int(),
+  episode: z.number().int(),
+  rule_id: z.string().nullable(),
+});
+export type MappingRow = z.infer<typeof mappingRowSchema>;

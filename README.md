@@ -6,16 +6,22 @@ non-Scene naming) to `(series, season, episode)` streams. Full design in
 
 ## Status
 
-**Milestone 1 of 6 (locked build order, spec §6): ingest only.** TorBox
-client, schema, migrations, `mylist` → Postgres with snapshots. No matching,
-no UI, no addon routes yet — those are Milestones 2–5.
+**Milestones 1-2 of 6 done (locked build order, spec §6).** Ingest (TorBox
+client, schema, migrations, `mylist` → Postgres with snapshots) plus
+`expandRule`: pure, exhaustively tested, and verified end to end against two
+hand-written SQL rules using the real examples from spec §1 (see
+`scripts/seed/milestone-2-example.sql`, `test/ingest/materialize.test.ts`).
+Three of the four `numbering` modes are implemented (`sequential`,
+`continuous`, `manual`); `parsed` throws a clear not-yet error until the
+extractor cascade lands in Milestone 5, per the locked build order. No
+addon routes or UI yet — Milestones 3-4.
 
 A handful of decisions the spec left open (confidence formula, numbering-mode
 semantics, an additive `provider_seasons` table, a couple of others) were
 resolved with a stated default and flagged for sign-off rather than guessed
-silently — see the plan/first-response written before this code, or search
-this codebase for `§3.` comments, which point back at the specific spec
-section each decision responds to.
+silently — see `torbox-ru-addon-plan.md`, or search this codebase for `§3.`
+comments, which point back at the specific spec section each decision
+responds to.
 
 **Not yet verified against the real TorBox API.** The sandbox this was built
 in has no network path to `api.torbox.app` or Docker Hub (org egress
@@ -47,6 +53,23 @@ npm run migrate:up      # apply migrations to whatever DATABASE_URL points at
 npm run ingest           # one ingest run
 npm run dev               # same, but re-runs on file changes are not wired up (Milestone 1 has no server loop yet)
 ```
+
+## Milestone 2: hand-written rules
+
+`scripts/seed/milestone-2-example.sql` inserts two titles/torrents/rules by
+hand (the first two real examples from spec §1) against whatever
+`DATABASE_URL` points at:
+
+```
+psql "$DATABASE_URL" -f scripts/seed/milestone-2-example.sql
+```
+
+`rebuildAllMappings()` (called automatically at the end of every ingest run,
+or directly from `src/ingest/materialize.ts`) then reads those rules,
+expands them, and writes `mappings`. `test/ingest/materialize.test.ts` does
+the same thing against `TEST_DATABASE_URL` and asserts the result is exactly
+right — that's the automated version of "verify expandRule materialises
+correct mappings" from the build order.
 
 ## Testing
 
