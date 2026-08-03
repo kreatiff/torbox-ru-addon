@@ -15,6 +15,14 @@ const envSchema = z.object({
   // per-file computed flag with an env override" -- this makes the
   // computation itself configurable rather than a blunt global switch.
   NOT_WEB_READY_EXTENSIONS: z.string().default('ts'),
+  // --- Milestone 4 (src/ui, admin UI & metadata) ---
+  TMDB_API_KEY: z.string().optional(),
+  // No default: this gates the entire admin surface (rule creation, ingest
+  // trigger, library/health data) behind HTTP Basic Auth, reachable from the
+  // same public Cloudflare Tunnel as the addon. A guessable default here
+  // defeats that gate entirely -- same reasoning as ADDON_TOKEN above.
+  ADMIN_USER: z.string().min(1, 'ADMIN_USER is required'),
+  ADMIN_PASS: z.string().min(1, 'ADMIN_PASS is required'),
 });
 
 function loadConfig() {
@@ -37,6 +45,9 @@ function loadConfig() {
     notWebReadyExtensions: parsed.data.NOT_WEB_READY_EXTENSIONS.split(',')
       .map((ext) => ext.trim().toLowerCase())
       .filter((ext) => ext.length > 0),
+    tmdbApiKey: parsed.data.TMDB_API_KEY,
+    adminUser: parsed.data.ADMIN_USER,
+    adminPass: parsed.data.ADMIN_PASS,
   };
 }
 

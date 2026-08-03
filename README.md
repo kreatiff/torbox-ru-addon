@@ -12,7 +12,8 @@ access to (see `docs/history.md`).
 
 ## Status
 
-**Milestones 1-3 of 6 done (locked build order, spec §6).** Ingest (TorBox
+**Milestones 1-3 of 6 done and merged (locked build order, spec §6); Milestone
+4 built and reviewed on its own branch, not yet merged.** Ingest (TorBox
 client, schema, migrations, `mylist` → Postgres with snapshots) plus
 `expandRule`: pure, exhaustively tested, and verified end to end against two
 hand-written SQL rules using the real examples from spec §1 (see
@@ -21,8 +22,9 @@ Three of the four `numbering` modes are implemented (`sequential`,
 `continuous`, `manual`); `parsed` throws a clear not-yet error until the
 extractor cascade lands in Milestone 5, per the locked build order. The
 Stremio-facing addon (`/manifest.json`, `/stream/series/:id.json`,
-`/play/:fileId` — see "Milestone 3: the addon" below) is built. No admin UI
-yet — Milestone 4.
+`/play/:fileId` — see "Milestone 3: the addon" below) is built. The admin
+Labeller UI (see "Milestone 4: admin UI" below) is built and reviewed on the
+`milestone4` branch, awaiting merge.
 
 A handful of decisions the spec left open (confidence formula, numbering-mode
 semantics, an additive `provider_seasons` table, a couple of others) were
@@ -125,14 +127,15 @@ toolchain is installed.
 No `.env` file needed either way — every variable `app` reads comes through
 plain `${VAR}` interpolation (`TORBOX_API_KEY`, `DATABASE_URL`,
 `TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`, `ADDON_TOKEN`, `PUBLIC_BASE`,
-`PORT`, `NOT_WEB_READY_EXTENSIONS`), not `env_file:`, specifically so a
-stack UI's own "Environment variables" section can supply them.
+`PORT`, `NOT_WEB_READY_EXTENSIONS`, `ADMIN_USER`, `ADMIN_PASS`,
+`TMDB_API_KEY`), not `env_file:`, specifically so a stack UI's own
+"Environment variables" section can supply them.
 
 **Option A — no clone at all.** `.github/workflows/docker-publish.yml`
 builds and pushes `ghcr.io/kreatiff/torbox-ru-addon:latest` (and a
 `:sha-<short>` tag) on every push to `dev`. Copy
 [`docker-compose.ghcr.yml`](./docker-compose.ghcr.yml)'s contents straight
-into Portainer's *Stacks → Add stack → Web editor* (no git repository
+into Portainer's _Stacks → Add stack → Web editor_ (no git repository
 needed), or run it directly with
 `docker compose -f docker-compose.ghcr.yml up -d` on any host. Then under
 the stack's **Environment variables** add at minimum:
@@ -141,32 +144,38 @@ the stack's **Environment variables** add at minimum:
 TORBOX_API_KEY=<your real key>
 ADDON_TOKEN=<generate with: openssl rand -hex 32>
 PUBLIC_BASE=<https://your-cloudflare-tunnel-hostname>
+ADMIN_USER=<pick a username>
+ADMIN_PASS=<pick a real password>
 ```
 
 `PUBLIC_BASE` is what gets embedded in every stream URL handed to Stremio,
 so it needs to actually be reachable from wherever Stremio/AIOStreams run —
 the Cloudflare Tunnel hostname in production, pointed at the stack's
-exposed port (`PORT`, default 3000).
+exposed port (`PORT`, default 3000). `ADMIN_USER`/`ADMIN_PASS` gate `/admin`
+and `/api` (see "Milestone 4: admin UI" below) — same public-tunnel exposure
+as the addon, so pick a real password, not a placeholder. `TMDB_API_KEY` is
+optional (the Labeller's show picker just returns no results without it).
 
 If the package is private (GHCR defaults new packages to the repo's
-visibility), either make it public under the repo's *Packages* tab, or add
-a registry credential in Portainer (*Registries*) or run
+visibility), either make it public under the repo's _Packages_ tab, or add
+a registry credential in Portainer (_Registries_) or run
 `docker login ghcr.io -u <github-user>` on the host first, using a PAT with
 `read:packages`.
 
-**Option B — build from source.** Point a Portainer *Stack* (Git
+**Option B — build from source.** Point a Portainer _Stack_ (Git
 repository method, this repo/branch, `docker-compose.yml` as the compose
 path) at it instead; Portainer clones the repo and builds the image itself
 on `docker compose up`. Same environment variables as Option A.
 
-Either way, everything except `TORBOX_API_KEY`, `ADDON_TOKEN`, and
-`PUBLIC_BASE` (`DATABASE_URL`, `POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`,
-`TORBOX_REQUEST_DELAY_MS`, `PORT`, `NOT_WEB_READY_EXTENSIONS`) has a
-matching default already in the compose file and only needs overriding if
-you want non-default Postgres credentials — in which case set
-`POSTGRES_USER`/`PASSWORD`/`DB` *and* a `DATABASE_URL` that matches them,
+Either way, everything except `TORBOX_API_KEY`, `ADDON_TOKEN`,
+`PUBLIC_BASE`, `ADMIN_USER`, and `ADMIN_PASS` (`DATABASE_URL`,
+`POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`,
+`PORT`, `NOT_WEB_READY_EXTENSIONS`, `TMDB_API_KEY`) has a matching default
+already in the compose file and only needs overriding if you want
+non-default Postgres credentials — in which case set
+`POSTGRES_USER`/`PASSWORD`/`DB` _and_ a `DATABASE_URL` that matches them,
 since the app connects with the latter, not the three parts. Leaving any of
-the three required variables unset deploys fine but the container exits
+the five required variables unset deploys fine but the container exits
 immediately with a clear "... is required" error (`src/config.ts`) — check
 the container logs.
 
@@ -233,6 +242,34 @@ a mocked TorBox response.
 Installing the manifest URL in real Stremio/AIOStreams and confirming
 actual playback needs a real deployment reachable from those clients — see
 the Status section above and `docs/milestones.md` §3.
+
+## Milestone 4: admin UI
+
+A React admin UI at `/admin` (Queue / Labeller / Library / Health tabs) plus
+a JSON API at `/api/*` — both gated independently by HTTP Basic Auth, using
+the same `ADMIN_USER`/`ADMIN_PASS` credentials, no default (like
+`ADDON_TOKEN`, since both surfaces sit behind the same public tunnel as the
+addon). `TMDB_API_KEY` (v3 query-key or v4 Bearer/JWT, either works) is
+optional — without it the Labeller's show picker just returns no results,
+nothing else depends on it.
+
+With the server running and a real `ADMIN_USER`/`ADMIN_PASS`:
+
+```
+curl -u "$ADMIN_USER:$ADMIN_PASS" http://localhost:3000/api/queue
+```
+
+The UI itself is a separate npm workspace (`ui/`) that needs its own install
+and build — not run automatically by the root `npm run build`/`npm run dev`:
+
+```
+cd ui && npm install && npm run build   # outputs to ../dist/ui, served at /admin
+```
+
+`docker compose up` builds the UI automatically (a dedicated Dockerfile
+stage) — this manual step is only needed for local development without
+Docker. Without a build present, `/admin/*` 404s with a clear message rather
+than failing silently (`src/http/routes/admin/index.ts`).
 
 ## Testing
 

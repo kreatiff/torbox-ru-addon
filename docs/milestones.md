@@ -139,14 +139,63 @@ play in a real client — that's this milestone's exact stated success criterion
 above stops just short of it (real resolution to the correct file is confirmed; real video
 decode is not yet explicitly confirmed).
 
-## 4. Labeller UI — ⏳ not started
+## 4. Labeller UI — ✅ built and reviewed; not yet merged to `dev`
 
 > Queue, labeller, preview table.
 
-Not started. Per the plan document's §3.6, this milestone's show picker needs *some* metadata
-search working (`src/metadata/`, notionally Milestone 5 scope) — the plan proposes folding a
-minimal TMDB-only `searchTitles` into this milestone rather than reordering anything, since the
-picker can't function without it. Needs `TMDB_API_KEY` from the repo owner when it starts.
+Built on the `milestone4` branch (not by the same agent that wrote everything above): a React +
+Vite admin UI (`ui/`) with Queue/Labeller/Library/Health tabs, mounted at `/admin` behind HTTP
+Basic Auth; a JSON API (`/api/queue`, `/api/torrents/:hash`, `/api/rules`, `/api/library`,
+`/api/health`, `/api/titles/search`, `/api/ingest/run`), also Basic-Auth-gated, independently of
+`/admin`; a minimal TMDB client (`src/metadata/tmdb.ts`, both v3 query-key and v4 Bearer/JWT
+formats) per the plan document's §3.6 proposal; and an additive `provider_seasons` cache table
+(already tracked above under "Schema additions"). The Labeller view imports `expandRule` and its
+types directly from `src/resolve/` for a live client-side mapping preview, per the plan's
+explicit "no `src/shared/`" design.
+
+**Reviewed and fixed before merge** (a second pass, on the same branch, not a rebuild): the
+initial version had `ADMIN_USER`/`ADMIN_PASS` defaulting to `admin`/`admin` with no compose
+wiring to override them — a real vulnerability given `/admin` and `/api` sit behind the same
+public Cloudflare Tunnel as the addon itself; fixed to required-with-no-default, matching
+`ADDON_TOKEN`'s existing precedent, and wired into both compose files and `.env.example`. Other
+fixes from the same pass:
+
+- The UI's Docker build stage ran plain `npm ci` for a Vite/esbuild/rollup toolchain that
+  _executes_ those tools during the build (not just installs them, unlike the backend's
+  `tsc`-only stage) — a stronger version of the QEMU-crash class already fixed once for the
+  backend (see the `--ignore-scripts` decision above). Fixed by giving the UI its own
+  `--platform=$BUILDPLATFORM` build stage (native build, architecture-independent static output
+  copied into the final image) — verified against a real CI build on a throwaway branch, including
+  a first attempt that caught a real, unrelated bug (the isolated stage didn't have the sibling
+  `src/resolve/` files `App.tsx` imports directly).
+- `npm run lint` failed (26 errors/11 warnings): the root `eslint.config.js` still ignored the
+  plan document's original `src/ui/dist/**` path instead of the UI's actual location (`ui/**`),
+  and the UI itself had a forbidden non-null assertion, ~18 unchecked `any` types across
+  `App.tsx`, a `no-case-declarations` violation, and two React-hooks correctness issues (a
+  `setState` call inside an effect that derives from asynchronously-loaded data, better expressed
+  as the "adjust state during render" pattern; a stale-closure risk in the queue keyboard-nav
+  effect's dependency array). All fixed for real — proper interfaces mirroring the API's actual
+  response shapes, not suppressions — and a dead code path was found and removed in the process:
+  the "Provider Mismatch" episode-count banner read `selectedShow.seasons`, a field TMDB search
+  results never carry (no route exists to fetch per-season episode counts client-side), so it was
+  always a silent no-op.
+- `POST /api/rules` accepted `numbering: 'parsed'` in its schema even though `expandRule` throws
+  for that mode (Milestone 5, not built) — the UI already disables the option, but the API had no
+  matching guard, so a raw request would commit a rule row with zero mappings and surface a bare 500. Now rejected with a 400 before anything is written.
+- TMDB season data was fetched live on every rule save with no cache check, despite
+  `provider_seasons` existing for exactly this (§5.4: "cache aggressively"). Now checks the cache
+  first.
+- `admin/index.ts`'s static-path resolution used a non-null assertion and would silently
+  `mkdirSync` a phantom directory if no UI build was found; rewritten to fail loud (a logged
+  warning + a real 404) instead of masking a broken deployment.
+- Test coverage for the new API routes was thin (only auth + `/titles/search`); added real
+  Postgres-backed tests for `/api/rules` (including the `parsed`-rejection and TMDB-cache-hit
+  paths), `/api/torrents/:hash`, `/api/library`, and `/api/health` — suite grew from 76 to 84
+  tests, all passing.
+
+**Not yet done:** merging `milestone4` into `dev`. Needs `TMDB_API_KEY` from the repo owner to
+actually exercise the show picker for real (tests mock the TMDB client; nothing has called the
+real TMDB API yet).
 
 ## 5. Auto-proposal engine — ⏳ not started
 
@@ -170,13 +219,14 @@ the admin surface.
 
 ---
 
-**Overall:** 3 of 6 milestones done, each verified as thoroughly as an isolated build sandbox
-allows, and Milestone 3 has since gone further than that: live-installed against the repo
-owner's real deployment, real TorBox account, and real clients (AIOStreams + Nuvio), which
-surfaced and fixed two genuine gaps (a TMDB-vs-IMDb id mismatch, and a production-image
-operational note on triggering ingest manually) and confirmed two real shows resolve correctly
-end to end. Milestone 1's own real-ARM64-host criterion has also been satisfied for real: the
-repo owner deployed the GHCR-published image via Portainer on the actual target host and a real
-ingest ran cleanly (210 torrents, 2067 files, clean exit). The one thing left isn't code — it's
-the repo owner actually pressing play and confirming real video decode, the last unconfirmed
-piece of Milestone 3's stated success criterion.
+**Overall:** 3 of 6 milestones done and merged to `dev`, each verified as thoroughly as an
+isolated build sandbox allows, and Milestone 3 has since gone further than that: live-installed
+against the repo owner's real deployment, real TorBox account, and real clients (AIOStreams +
+Nuvio), which surfaced and fixed two genuine gaps (a TMDB-vs-IMDb id mismatch, and a
+production-image operational note on triggering ingest manually) and confirmed two real shows
+resolve correctly end to end. Milestone 1's own real-ARM64-host criterion has also been satisfied
+for real: the repo owner deployed the GHCR-published image via Portainer on the actual target
+host and a real ingest ran cleanly (210 torrents, 2067 files, clean exit). The one thing left on
+Milestone 3 isn't code — it's the repo owner actually pressing play and confirming real video
+decode, the last unconfirmed piece of its stated success criterion. Milestone 4 is built and
+reviewed on its own branch (see above) but not yet merged.

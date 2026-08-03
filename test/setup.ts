@@ -9,4 +9,6 @@ process.env.DATABASE_URL ??= 'postgresql://placeholder:placeholder@localhost:543
 process.env.TORBOX_API_KEY ??= 'test-key';
 process.env.ADDON_TOKEN ??= 'test-addon-token';
 process.env.PUBLIC_BASE ??= 'http://localhost:3000';
+process.env.ADMIN_USER ??= 'test-admin';
+process.env.ADMIN_PASS ??= 'test-admin-pass';
 process.env.NODE_ENV = 'test';
