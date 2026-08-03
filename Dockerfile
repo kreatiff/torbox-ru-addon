@@ -5,7 +5,12 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --ignore-scripts: devDependencies pull in esbuild/rollup (via vitest, tsx) purely for
+# local dev/test — this stage only ever runs `tsc`. Their postinstall scripts exec a
+# native arm64 binary to validate it, which crashes under GitHub Actions' QEMU emulation
+# ("qemu: uncaught target signal 4 - Illegal instruction"); skipping lifecycle scripts
+# avoids that entirely and is safe since nothing here needs install-time compilation.
+RUN npm ci --ignore-scripts
 COPY tsconfig.base.json tsconfig.json ./
 COPY src ./src
 RUN npm run build
