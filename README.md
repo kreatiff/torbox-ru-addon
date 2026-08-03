@@ -253,6 +253,13 @@ addon). `TMDB_API_KEY` (v3 query-key or v4 Bearer/JWT, either works) is
 optional — without it the Labeller's show picker just returns no results,
 nothing else depends on it.
 
+Rules already mapped and showing in the Library tab are editable, not just
+creatable from the Queue: each rule listed under a season has an **Edit**
+button that opens the Labeller pre-filled with that rule's season, numbering,
+sort, exceptions, and show — change anything and save to update it in place
+(or move it to a different season; the old rule and its mappings are cleaned
+up automatically rather than left behind).
+
 With the server running and a real `ADMIN_USER`/`ADMIN_PASS`:
 
 ```

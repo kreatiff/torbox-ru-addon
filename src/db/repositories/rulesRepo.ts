@@ -41,10 +41,10 @@ export async function getRuleByTorrentAndSeason(
   torrentHash: string,
   season: number,
 ): Promise<Rule | undefined> {
-  const result = await pool.query(
-    'select * from rules where torrent_hash = $1 and season = $2',
-    [torrentHash, season],
-  );
+  const result = await pool.query('select * from rules where torrent_hash = $1 and season = $2', [
+    torrentHash,
+    season,
+  ]);
   const row = result.rows[0];
   return row ? toRule(ruleRowSchema.parse(row)) : undefined;
 }
@@ -54,9 +54,19 @@ export async function listRules(): Promise<Rule[]> {
   return result.rows.map((row) => toRule(ruleRowSchema.parse(row)));
 }
 
-export async function upsertRule(
-  ruleData: Omit<Rule, 'id'>,
-): Promise<Rule> {
+/**
+ * `mappings.rule_id` is `on delete cascade` (see the init migration), so
+ * this also removes every mapping this rule produced -- used when editing
+ * a rule changes its season: the (torrent_hash, season) unique constraint
+ * means upsertRule can't just overwrite the old row in that case (the new
+ * season doesn't conflict with it), so the caller deletes the old rule
+ * first to avoid leaving it -- and its now-stale mappings -- behind.
+ */
+export async function deleteRule(id: string): Promise<void> {
+  await pool.query('delete from rules where id = $1', [id]);
+}
+
+export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
   const result = await pool.query(
     `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
