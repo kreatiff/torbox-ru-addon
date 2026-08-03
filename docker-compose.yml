@@ -15,6 +15,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
     # Not exposed on purpose: only `app` needs to reach Postgres, over the
     # compose-internal network. Nothing here should be reachable from the
     # Cloudflare Tunnel — that only points at `app` (from Milestone 3 on).
