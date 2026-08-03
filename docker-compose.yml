@@ -4,13 +4,14 @@ services:
     platform: linux/arm64
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      # Fallbacks match .env.example; override in .env for any real deployment.
+      POSTGRES_USER: ${POSTGRES_USER:-torbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-torbox_ru}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-torbox} -d ${POSTGRES_DB:-torbox_ru}']
       interval: 5s
       timeout: 5s
       retries: 10
