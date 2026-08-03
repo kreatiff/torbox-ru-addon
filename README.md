@@ -69,19 +69,33 @@ have. Harmless today — the call is best-effort and ingest doesn't depend on
 it — but force-refresh itself needs those credentials from the repo owner
 to ever actually work. See `decisions.md` for both.
 
-**Milestone 3 (the addon) is built and verified as far as this sandbox
-allows.** Manifest shape, constant-time `:token` auth (valid/invalid/missing,
-all as a 404), and stream resolution against real Postgres rows all pass in
-`test/http/`; `/play/:fileId`'s 302 redirect and `play_log` insert are
-verified against a mocked TorBox response (no real request ever needs to
-succeed for the redirect logic itself to be correct), and a dedicated test
-asserts `TORBOX_API_KEY` never appears in any response body or header.
-**Still needs the repo owner**: a real deployment reachable from the
-internet (`PUBLIC_BASE`, i.e. the Cloudflare Tunnel), a real `ADDON_TOKEN`,
-and installing the resulting manifest URL in real Stremio and AIOStreams to
-confirm actual playback of a `.ts` and an `.mp4` file — that's Milestone 3's
-actual, stated success criterion, and isn't achievable from an isolated
-build sandbox. See `docs/milestones.md` §3.
+**Milestone 3 (the addon) is built, sandbox-verified, and now also
+installed against the repo owner's real deployment, real TorBox account,
+and real clients (AIOStreams + Nuvio).** Manifest shape, constant-time
+`:token` auth (valid/invalid/missing, all as a 404), and stream resolution
+against real Postgres rows all pass in `test/http/`; `/play/:fileId`'s 302
+redirect and `play_log` insert are verified against a mocked TorBox
+response, and a dedicated test asserts `TORBOX_API_KEY` never appears in
+any response body or header.
+
+Real-world installation surfaced and fixed a genuine gap: AIOStreams
+resolves some titles via **TMDB**, not IMDb, and the manifest originally
+only declared IMDb (`tt...`) support — AIOStreams correctly filtered the
+addon out client-side for those titles rather than sending a request that
+would 404. Fixed by declaring both id schemes and teaching the stream route
+to resolve either (see `docs/decisions.md`). Two real shows from the
+owner's library have since been hand-mapped and confirmed resolving to the
+correct files end to end: one where each episode is its own separate
+torrent (four rules, one per torrent), and one with two overlapping
+torrents for the same season — an earlier incomplete one and a later
+complete one, both intentionally held per §4's mappings design, offering
+two stream sources for the episodes they share.
+
+**Still needs the repo owner**: actually pressing play and confirming a
+`.ts` and an `.mp4` file play in a real client — that's Milestone 3's exact
+stated success criterion, and everything above stops just short of it (real
+resolution to the correct file, confirmed; real video decode, not yet
+explicitly confirmed). See `docs/milestones.md` §3.
 
 ## Setup
 
@@ -96,8 +110,15 @@ docker-compose.yml's comments). Ingest is still manual until Milestone 6's
 scheduler lands:
 
 ```
-docker compose exec app npm run ingest
+docker compose exec app node dist/ingest/runOnce.js
 ```
+
+Not `npm run ingest` — that script invokes `tsx` against the TypeScript
+source, and the production image only ships the compiled `dist/` output
+plus production dependencies (no `tsx`, no `src/`, found the hard way
+running this against a real deployment). `npm run ingest` only works in
+[local development](#local-development-without-docker), where the full dev
+toolchain is installed.
 
 ### Deploying via Portainer (or Swarm, or any other UI-managed stack)
 

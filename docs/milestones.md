@@ -75,7 +75,7 @@ produces exactly the right `mappings` rows (spot-checked directly via `psql`, an
 isn't an `expandRule` case at all — `expandRule` never sees "X из Y"; that's a
 confidence-scoring input for `proposeRule`, Milestone 5.
 
-## 3. Manifest + stream + play — ✅ built, verified as far as an isolated sandbox allows
+## 3. Manifest + stream + play — ✅ built and live-tested; final playback confirmation pending
 
 > Install in Stremio and in AIOStreams as a custom addon. Confirm actual playback of a `.ts`
 > file and an `.mp4` file. The data model is free to change until this works and expensive to
@@ -104,10 +104,40 @@ local Postgres seeded with one real ingested file: `/manifest.json`, a wrong tok
 itself, not a bug in this addon — see the decisions log entry on `/play/:fileId` and what it
 can and can't protect.
 
-**Still needs the repo owner, same as before:** a real deployment reachable from the internet
-(`PUBLIC_BASE`, the Cloudflare Tunnel) and installing the manifest URL in real Stremio and
-AIOStreams to confirm actual playback of a `.ts` and an `.mp4` file — that's this milestone's
-actual, stated success criterion, and still isn't achievable from an isolated build sandbox.
+**Since then, installed against the real deployment, real TorBox account, and real clients**
+(AIOStreams + Nuvio) — the part that genuinely can't happen from an isolated sandbox. The
+manifest URL (`https://rtb.1pod.top/<token>/manifest.json`) was confirmed reachable and correct
+from outside the repo owner's network. Two real findings came out of this, both fixed:
+
+- **`npm run ingest` doesn't work inside the deployed container** — it invokes `tsx` against
+  the TypeScript source, and the production image only ships compiled `dist/` output plus
+  production dependencies (no `tsx`, no `src/`, by design — see the Dockerfile decision
+  above). `docker compose exec app node dist/ingest/runOnce.js` is the correct manual trigger
+  until Milestone 6's scheduler exists; README corrected.
+- **AIOStreams resolves some titles via TMDB, not IMDb** — a real show came through as
+  `tmdb:250793:3:3`, and since the manifest only declared `idPrefixes: ["tt"]`, AIOStreams
+  correctly filtered this addon out client-side rather than ever sending the request (nothing
+  reached the app's own logs, which is what made this look like a request/mapping problem at
+  first). Fixed: manifest now declares `["tt", "tmdb:"]`, and `stream.ts` exports a pure,
+  tested `parseStreamId` that resolves either shape. See decisions log.
+
+Two real shows from the owner's library have since been hand-mapped (one title + rule(s) each,
+written directly as SQL — Milestone 4's Labeller UI doesn't exist yet) and confirmed resolving
+to the correct files via the verification query, exercising two different real-world shapes the
+rule model already supported without any code change:
+
+- One where each episode is its own separate torrent (TorBox library's real "Bolshoy Kush"
+  torrents) — four rules, one per torrent, each pinned directly to its own episode number.
+- One with two overlapping torrents for the same season (the real "Сокровища императора"
+  torrents, matching spec §1's example almost verbatim) — an earlier incomplete upload and a
+  later complete one, both intentionally held per §4's mappings design ("multiple files may map
+  to the same episode"), given a title carrying both a real `imdb_id` and `tmdb_id` at once
+  (independent nullable-unique columns on the same row, so either lookup finds it).
+
+**Still needs the repo owner:** actually pressing play and confirming a `.ts` and an `.mp4` file
+play in a real client — that's this milestone's exact stated success criterion, and everything
+above stops just short of it (real resolution to the correct file is confirmed; real video
+decode is not yet explicitly confirmed).
 
 ## 4. Labeller UI — ⏳ not started
 
@@ -141,8 +171,12 @@ the admin surface.
 ---
 
 **Overall:** 3 of 6 milestones done, each verified as thoroughly as an isolated build sandbox
-allows. Milestone 1's own real-ARM64-host criterion has since also been satisfied for real: the
-repo owner deployed the GHCR-published image via Portainer on the actual target host and a
-real ingest ran cleanly (210 torrents, 2067 files, clean exit). The next real blocker isn't
-code — it's the repo owner's live deployment and Stremio/AIOStreams installs, needed to
-confirm Milestone 3's actual playback requirement.
+allows, and Milestone 3 has since gone further than that: live-installed against the repo
+owner's real deployment, real TorBox account, and real clients (AIOStreams + Nuvio), which
+surfaced and fixed two genuine gaps (a TMDB-vs-IMDb id mismatch, and a production-image
+operational note on triggering ingest manually) and confirmed two real shows resolve correctly
+end to end. Milestone 1's own real-ARM64-host criterion has also been satisfied for real: the
+repo owner deployed the GHCR-published image via Portainer on the actual target host and a real
+ingest ran cleanly (210 torrents, 2067 files, clean exit). The one thing left isn't code — it's
+the repo owner actually pressing play and confirming real video decode, the last unconfirmed
+piece of Milestone 3's stated success criterion.
