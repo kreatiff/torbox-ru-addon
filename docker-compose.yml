@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16
+    platform: linux/arm64
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not exposed on purpose: only `app` needs to reach Postgres, over the
+    # compose-internal network. Nothing here should be reachable from the
+    # Cloudflare Tunnel — that only points at `app` (from Milestone 3 on).
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    # Milestone 1 shape: one ingest run per `docker compose up`, then exit.
+    # Switches to a long-running server + internal scheduler in Milestone
+    # 3/6 — restart policy and a ports mapping belong here once that lands.
+    restart: 'no'
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

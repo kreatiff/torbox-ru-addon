@@ -1,0 +1,11 @@
+node_modules
+dist
+src/ui/node_modules
+src/ui/dist
+.git
+.env
+.env.*
+!.env.example
+*.log
+coverage
+.vscode
