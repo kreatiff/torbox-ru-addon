@@ -8,16 +8,22 @@ import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// production: dist/http/routes/admin/index.js -> dist/ui (3 levels up)
-const PROD_UI_PATH = path.resolve(__dirname, '../../../ui');
-// dev/test: src/http/routes/admin/index.ts -> ui (4 levels up)
-const DEV_UI_PATH = path.resolve(__dirname, '../../../../ui');
+// This file lives at the same depth from the repo root whether it's
+// running compiled (dist/http/routes/admin/index.js) or directly from
+// source via tsx (src/http/routes/admin/index.ts) -- four levels down
+// either way -- and ui/vite.config.ts's outDir ("../dist/ui" relative to
+// the ui/ project root) always lands the build at <repo-root>/dist/ui
+// regardless of which one is running. One path, not a dev/prod pair: an
+// earlier version tried to pick between "../../../ui" and "../../../../ui"
+// by checking which existed, but the former is always <repo-root>/src/ui
+// (never real) and the latter is <repo-root>/ui -- the *source* tree,
+// whose checked-in index.html references unbundled /src/main.tsx and was
+// never buildable by a browser -- so that check always "succeeded" against
+// the wrong directory once ui/ existed at all, even after a real build.
+const UI_BUILD_PATH = path.resolve(__dirname, '../../../..', 'dist', 'ui');
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  const uiBuildPath = fs.existsSync(path.join(DEV_UI_PATH, 'index.html'))
-    ? DEV_UI_PATH
-    : PROD_UI_PATH;
-  const uiBuildExists = fs.existsSync(path.join(uiBuildPath, 'index.html'));
+  const uiBuildExists = fs.existsSync(path.join(UI_BUILD_PATH, 'index.html'));
 
   // No build found is a real, expected state (tests, or a fresh checkout
   // before `npm run build` has run inside ui/) -- warn and degrade to 404
@@ -28,7 +34,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   // instead of surfacing it.
   if (!uiBuildExists) {
     app.log.warn(
-      { uiBuildPath },
+      { uiBuildPath: UI_BUILD_PATH },
       'Admin UI build not found -- /admin/* will 404 until `npm run build` runs inside ui/ (or the Docker image is rebuilt).',
     );
   }
@@ -42,7 +48,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     // Serve static assets. Because this plugin is registered with prefix '/admin',
     // we map the static files prefix to '/' so they resolve under '/admin/<file>'
     app.register(fastifyStatic, {
-      root: uiBuildPath,
+      root: UI_BUILD_PATH,
       prefix: '/',
       decorateReply: false,
     });
@@ -52,7 +58,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   // Since fastifyStatic registers wildcards, we set a plugin-scoped not-found handler.
   // Any request under '/admin/*' that doesn't match a static file falls here and gets index.html.
   app.setNotFoundHandler(async (request, reply) => {
-    const indexPath = path.join(uiBuildPath, 'index.html');
+    const indexPath = path.join(UI_BUILD_PATH, 'index.html');
     if (fs.existsSync(indexPath)) {
       reply.type('text/html');
       return fs.createReadStream(indexPath);

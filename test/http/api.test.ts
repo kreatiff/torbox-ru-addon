@@ -127,6 +127,54 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
     expect(body.rawNameAtIngest).toBe('Show S01');
     // Natural sort: "2.mp4" before "10.mp4", not lexicographic ("10" < "2").
     expect(body.files.map((f: { rawPath: string }) => f.rawPath)).toEqual(['2.mp4', '10.mp4']);
+    expect(body.rules).toEqual([]);
+    await app.close();
+  });
+
+  it('includes existing rules with their title joined in, for editing', async () => {
+    const title = await pool.query(
+      `insert into titles (name_ru, tmdb_id) values ('Show', 42) returning id`,
+    );
+    const titleId = title.rows[0].id as string;
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h2', 1002, 'Show S02', now())`,
+    );
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('h2', $1, 2, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [titleId],
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/torrents/h2',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.rules).toEqual([
+      {
+        id: rule.rows[0].id,
+        season: 2,
+        numbering: 'sequential',
+        sort: 'natural',
+        startEpisode: 1,
+        absoluteOffset: null,
+        exceptions: {},
+        title: {
+          id: titleId,
+          tmdbId: 42,
+          imdbId: null,
+          tvdbId: null,
+          nameRu: 'Show',
+          nameEn: null,
+          year: null,
+          posterUrl: null,
+        },
+      },
+    ]);
     await app.close();
   });
 });
@@ -221,6 +269,97 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
 
     const titlesCount = await pool.query('select count(*) from titles');
     expect(Number(titlesCount.rows[0].count)).toBe(1);
+    await app.close();
+  });
+
+  it('editing a rule with the season unchanged updates the same row in place', async () => {
+    const app = build();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/rules',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {
+        torrentHash: 'h1',
+        season: 1,
+        numbering: 'sequential',
+        sort: 'natural',
+        startEpisode: 1,
+        title: { nameRu: 'Show' },
+      },
+    });
+    const ruleId = created.json().rule.id as string;
+    const titleId = created.json().rule.titleId as string;
+
+    const edited = await app.inject({
+      method: 'POST',
+      url: '/api/rules',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {
+        ruleId,
+        torrentHash: 'h1',
+        season: 1,
+        numbering: 'manual',
+        sort: 'natural',
+        startEpisode: 1,
+        titleId,
+        exceptions: { '1': { season: 1, episode: 5 } },
+      },
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().rule.id).toBe(ruleId);
+
+    const rules = await pool.query('select id, numbering from rules');
+    expect(rules.rows).toEqual([{ id: ruleId, numbering: 'manual' }]);
+    await app.close();
+  });
+
+  it('editing a rule into a different season deletes the old rule and its mappings instead of leaving them behind', async () => {
+    const app = build();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/rules',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {
+        torrentHash: 'h1',
+        season: 1,
+        numbering: 'sequential',
+        sort: 'natural',
+        startEpisode: 1,
+        title: { nameRu: 'Show' },
+      },
+    });
+    const ruleId = created.json().rule.id as string;
+    const titleId = created.json().rule.titleId as string;
+    const originalMappings = await pool.query('select count(*) from mappings');
+    expect(Number(originalMappings.rows[0].count)).toBe(2);
+
+    const edited = await app.inject({
+      method: 'POST',
+      url: '/api/rules',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {
+        ruleId,
+        torrentHash: 'h1',
+        season: 2,
+        numbering: 'sequential',
+        sort: 'natural',
+        startEpisode: 1,
+        titleId,
+      },
+    });
+    expect(edited.statusCode).toBe(200);
+    const newRuleId = edited.json().rule.id as string;
+    expect(newRuleId).not.toBe(ruleId);
+
+    // Exactly one rule survives -- the old season-1 row is gone, not left
+    // behind as an orphan -- and its mappings cascaded away with it.
+    const rules = await pool.query('select id, season from rules');
+    expect(rules.rows).toEqual([{ id: newRuleId, season: 2 }]);
+    const mappings = await pool.query('select season, episode from mappings order by episode');
+    expect(mappings.rows).toEqual([
+      { season: 2, episode: 1 },
+      { season: 2, episode: 2 },
+    ]);
     await app.close();
   });
 

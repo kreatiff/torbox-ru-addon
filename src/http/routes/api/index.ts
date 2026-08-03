@@ -8,6 +8,8 @@ import {
   upsertRule,
   upsertProviderSeason,
   getProviderSeason,
+  getRuleById,
+  deleteRule,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest } from '../../../ingest/pipeline.js';
@@ -42,6 +44,10 @@ const saveRuleBodySchema = z.object({
     })
     .optional(),
   titleId: z.string().optional(),
+  // Set when editing an already-mapped rule from the Library view (as
+  // opposed to creating a fresh one from the Queue) -- lets the handler
+  // below clean up the old row if the edit also changed the season.
+  ruleId: z.string().optional(),
 });
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
@@ -122,11 +128,44 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       }))
       .sort((a, b) => naturalCompare(a.rawPath, b.rawPath));
 
+    // Existing rules for this torrent (if any), with their title joined in --
+    // lets the Labeller UI pre-fill an edit form instead of only supporting
+    // fresh rules for not-yet-mapped torrents from the Queue.
+    const rulesResult = await pool.query(
+      `select r.id, r.season, r.numbering, r.sort, r.start_episode, r.absolute_offset, r.exceptions,
+              t.id as title_id, t.tmdb_id, t.imdb_id, t.tvdb_id, t.name_ru, t.name_en, t.year, t.poster_url
+       from rules r
+       join titles t on t.id = r.title_id
+       where r.torrent_hash = $1
+       order by r.season`,
+      [hash],
+    );
+    const rules = rulesResult.rows.map((row) => ({
+      id: row.id,
+      season: row.season,
+      numbering: row.numbering,
+      sort: row.sort,
+      startEpisode: row.start_episode,
+      absoluteOffset: row.absolute_offset,
+      exceptions: row.exceptions,
+      title: {
+        id: row.title_id,
+        tmdbId: row.tmdb_id,
+        imdbId: row.imdb_id,
+        tvdbId: row.tvdb_id,
+        nameRu: row.name_ru,
+        nameEn: row.name_en,
+        year: row.year,
+        posterUrl: row.poster_url,
+      },
+    }));
+
     return {
       hash: torrent.hash,
       rawNameAtIngest: torrent.raw_name_at_ingest,
       status: torrent.status,
       files: sortedFiles,
+      rules,
     };
   });
 
@@ -221,6 +260,24 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
           { err, tmdbId: body.title.tmdbId, season: body.season },
           'Failed to fetch/cache season details from TMDB',
         );
+      }
+    }
+
+    // Editing an existing rule (from the Library view) into a different
+    // season: upsertRule's ON CONFLICT target is (torrent_hash, season), so
+    // a season change doesn't overwrite the rule being edited -- it would
+    // leave the old row (and its now-stale mappings) behind as an orphan.
+    // Delete it first in that case. Ownership is checked against
+    // torrentHash so a mismatched/stale ruleId can't delete an unrelated
+    // rule.
+    if (body.ruleId) {
+      const existingRule = await getRuleById(body.ruleId);
+      if (
+        existingRule &&
+        existingRule.torrentHash === body.torrentHash &&
+        existingRule.season !== body.season
+      ) {
+        await deleteRule(body.ruleId);
       }
     }
 

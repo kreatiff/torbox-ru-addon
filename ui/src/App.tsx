@@ -38,6 +38,39 @@ interface TmdbSearchResult {
   posterUrl: string | null;
 }
 
+// The Labeller's "selected show" card accepts either a fresh TMDB search
+// pick (no titleId -- the server resolves/creates the title from tmdbId) or
+// an existing title carried over from a rule being edited (titleId set, so
+// the server reuses it directly instead of re-resolving external ids).
+interface SelectedShowInfo {
+  titleId?: string;
+  tmdbId: number | null;
+  nameRu: string;
+  nameEn: string | null;
+  year: number | null;
+  posterUrl: string | null;
+}
+
+interface ExistingRule {
+  id: string;
+  season: number;
+  numbering: 'sequential' | 'parsed' | 'continuous' | 'manual';
+  sort: 'natural' | 'path';
+  startEpisode: number;
+  absoluteOffset: number | null;
+  exceptions: Record<string, RuleException>;
+  title: {
+    id: string;
+    tmdbId: number | null;
+    imdbId: string | null;
+    tvdbId: number | null;
+    nameRu: string;
+    nameEn: string | null;
+    year: number | null;
+    posterUrl: string | null;
+  };
+}
+
 interface QueueItem {
   hash: string;
   rawNameAtIngest: string;
@@ -64,6 +97,7 @@ interface TorrentDetails {
   rawNameAtIngest: string;
   status: string;
   files: FileEntry[];
+  rules: ExistingRule[];
 }
 
 interface SaveRuleBody {
@@ -82,6 +116,10 @@ interface SaveRuleBody {
     posterUrl?: string | null;
   };
   titleId?: string;
+  // Set when editing an already-mapped rule (as opposed to creating a fresh
+  // one from the Queue) -- lets the server clean up the old row if the edit
+  // also changed the season (see docs/decisions.md).
+  ruleId?: string;
 }
 
 interface SaveRuleResponse {
@@ -275,6 +313,12 @@ function AdminApp() {
 
   // Selected torrent for Labeller
   const [selectedTorrentHash, setSelectedTorrentHash] = useState<string | null>(null);
+  // Set when the Labeller was opened to edit an already-mapped rule from the
+  // Library view, rather than to create a fresh one from the Queue.
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  // Where Cancel/Save should send the user back to -- Queue for a fresh
+  // rule, Library for an edit of an existing one.
+  const [returnTab, setReturnTab] = useState<'queue' | 'library'>('queue');
 
   // Queries
   const { data: queue = [], isLoading: isQueueLoading } = useQuery({
@@ -318,8 +362,10 @@ function AdminApp() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['library'] });
+      queryClient.invalidateQueries({ queryKey: ['torrentDetails'] });
       setSelectedTorrentHash(null);
-      setActiveTab('queue');
+      setEditingRuleId(null);
+      setActiveTab(returnTab);
     },
     onError: (err) => {
       alert(`Failed to save rule: ${err.message}`);
@@ -459,6 +505,8 @@ function AdminApp() {
             setSelectedIdx={setSelectedQueueIdx}
             onSelect={(hash) => {
               setSelectedTorrentHash(hash);
+              setEditingRuleId(null);
+              setReturnTab('queue');
               setActiveTab('labeller');
             }}
           />
@@ -471,14 +519,27 @@ function AdminApp() {
             details={torrentDetails}
             isLoading={isDetailsLoading}
             saveRule={saveRule}
+            initialRuleId={editingRuleId}
             onCancel={() => {
               setSelectedTorrentHash(null);
-              setActiveTab('queue');
+              setEditingRuleId(null);
+              setActiveTab(returnTab);
             }}
           />
         )}
 
-        {activeTab === 'library' && <LibraryView library={library} isLoading={isLibraryLoading} />}
+        {activeTab === 'library' && (
+          <LibraryView
+            library={library}
+            isLoading={isLibraryLoading}
+            onEditRule={(torrentHash, ruleId) => {
+              setSelectedTorrentHash(torrentHash);
+              setEditingRuleId(ruleId);
+              setReturnTab('library');
+              setActiveTab('labeller');
+            }}
+          />
+        )}
 
         {activeTab === 'health' && (
           <HealthView health={health} isLoading={isHealthLoading} triggerIngest={triggerIngest} />
@@ -594,13 +655,23 @@ interface LabellerViewProps {
   details: TorrentDetails | undefined;
   isLoading: boolean;
   saveRule: UseMutationResult<SaveRuleResponse, Error, SaveRuleBody>;
+  // The rule being edited (from the Library view), if any -- null for a
+  // fresh rule started from the Queue.
+  initialRuleId: string | null;
   onCancel: () => void;
 }
-function LabellerView({ hash, details, isLoading, saveRule, onCancel }: LabellerViewProps) {
+function LabellerView({
+  hash,
+  details,
+  isLoading,
+  saveRule,
+  initialRuleId,
+  onCancel,
+}: LabellerViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedShow, setSelectedShow] = useState<TmdbSearchResult | null>(null);
+  const [selectedShow, setSelectedShow] = useState<SelectedShowInfo | null>(null);
   // Guards the details -> season/searchQuery initial-fill below so it only
   // runs once per mount (LabellerView is remounted via `key={hash}` in the
   // parent whenever the selected torrent changes, so this doesn't need to
@@ -637,20 +708,41 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
 
   if (isLoading || !details) return <div className="view-body">Loading files details...</div>;
 
-  // Auto-fill proposed season/search query from the torrent name, once, the
-  // first time `details` becomes available (adjusting state during render
-  // instead of in an effect -- see https://react.dev/learn/you-might-not-need-an-effect).
+  const editingRule = initialRuleId ? details.rules.find((r) => r.id === initialRuleId) : undefined;
+
+  // Fill the form once, the first time `details` becomes available
+  // (adjusting state during render instead of in an effect -- see
+  // https://react.dev/learn/you-might-not-need-an-effect): from the
+  // existing rule if we're editing one, otherwise auto-fill a proposed
+  // season/search query from the torrent name for a fresh rule.
   if (!initialized) {
-    const name = details.rawNameAtIngest.replace(/\[.*?\]/g, '').trim();
-    const seasonMatch = name.match(/(\d+)\s*(сезон|season)/i);
-    let initialSeason = season;
-    let initialQuery = name;
-    if (seasonMatch && seasonMatch[1]) {
-      initialSeason = parseInt(seasonMatch[1], 10);
-      initialQuery = name.replace(seasonMatch[0], '').trim();
+    if (editingRule) {
+      setSeason(editingRule.season);
+      setNumberingMode(editingRule.numbering);
+      setSortMode(editingRule.sort);
+      setStartEpisode(editingRule.startEpisode);
+      setAbsoluteOffset(editingRule.absoluteOffset);
+      setExceptions(editingRule.exceptions);
+      setSelectedShow({
+        titleId: editingRule.title.id,
+        tmdbId: editingRule.title.tmdbId,
+        nameRu: editingRule.title.nameRu,
+        nameEn: editingRule.title.nameEn,
+        year: editingRule.title.year,
+        posterUrl: editingRule.title.posterUrl,
+      });
+    } else {
+      const name = details.rawNameAtIngest.replace(/\[.*?\]/g, '').trim();
+      const seasonMatch = name.match(/(\d+)\s*(сезон|season)/i);
+      let initialSeason = season;
+      let initialQuery = name;
+      if (seasonMatch && seasonMatch[1]) {
+        initialSeason = parseInt(seasonMatch[1], 10);
+        initialQuery = name.replace(seasonMatch[0], '').trim();
+      }
+      setSeason(initialSeason);
+      setSearchQuery(initialQuery);
     }
-    setSeason(initialSeason);
-    setSearchQuery(initialQuery);
     setInitialized(true);
   }
 
@@ -703,6 +795,7 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
     }
 
     saveRule.mutate({
+      ruleId: initialRuleId ?? undefined,
       torrentHash: hash,
       season,
       numbering: numberingMode,
@@ -710,13 +803,21 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
       startEpisode,
       absoluteOffset,
       exceptions,
-      title: {
-        tmdbId: selectedShow.tmdbId,
-        nameRu: selectedShow.nameRu,
-        nameEn: selectedShow.nameEn,
-        year: selectedShow.year,
-        posterUrl: selectedShow.posterUrl,
-      },
+      // A titleId carried over from editing (show unchanged) skips
+      // re-resolving external ids from TMDB server-side; picking a
+      // different show via search always goes through `title` instead,
+      // same as a fresh rule.
+      ...(selectedShow.titleId
+        ? { titleId: selectedShow.titleId }
+        : {
+            title: {
+              tmdbId: selectedShow.tmdbId,
+              nameRu: selectedShow.nameRu,
+              nameEn: selectedShow.nameEn,
+              year: selectedShow.year,
+              posterUrl: selectedShow.posterUrl,
+            },
+          }),
     });
   };
 
@@ -737,13 +838,24 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
   return (
     <>
       <div className="view-header">
-        <h2>Manual Mapping Labeller</h2>
+        <h2>
+          Manual Mapping Labeller
+          {editingRule && (
+            <span className="badge info" style={{ marginLeft: '8px' }}>
+              Editing S{editingRule.season}
+            </span>
+          )}
+        </h2>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
           <button className="btn btn-primary" onClick={handleSubmit} disabled={saveRule.isPending}>
-            {saveRule.isPending ? 'Saving...' : 'Save Rule & Mappings'}
+            {saveRule.isPending
+              ? 'Saving...'
+              : editingRule
+                ? 'Update Rule & Mappings'
+                : 'Save Rule & Mappings'}
           </button>
         </div>
       </div>
@@ -847,7 +959,9 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
           <div className="labeller-pane">
             <div className="pane-header">
               <span>Mapping Parameters</span>
-              {selectedShow && <span className="badge info">TMDB: {selectedShow.tmdbId}</span>}
+              {selectedShow?.tmdbId && (
+                <span className="badge info">TMDB: {selectedShow.tmdbId}</span>
+              )}
             </div>
             <div
               className="pane-body"
@@ -902,7 +1016,18 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
                           cursor: 'pointer',
                         }}
                         onClick={() => {
-                          setSelectedShow(show);
+                          // A fresh pick from search, never a stale
+                          // titleId from whatever was previously selected
+                          // (e.g. when editing and switching to a
+                          // different show) -- the server resolves/creates
+                          // the title from tmdbId instead.
+                          setSelectedShow({
+                            tmdbId: show.tmdbId,
+                            nameRu: show.nameRu,
+                            nameEn: show.nameEn,
+                            year: show.year,
+                            posterUrl: show.posterUrl,
+                          });
                           setSearchResults([]);
                         }}
                         className="hover-highlight"
@@ -1160,8 +1285,9 @@ function LabellerView({ hash, details, isLoading, saveRule, onCancel }: Labeller
 interface LibraryViewProps {
   library: LibraryItem[];
   isLoading: boolean;
+  onEditRule: (torrentHash: string, ruleId: string) => void;
 }
-function LibraryView({ library, isLoading }: LibraryViewProps) {
+function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
   if (isLoading) return <div className="view-body">Loading library grid...</div>;
 
   return (
@@ -1243,6 +1369,40 @@ function LibraryView({ library, isLoading }: LibraryViewProps) {
                         </span>
                       </div>
                       <div className="episode-grid">{boxes}</div>
+                      {season.rules.length > 0 && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            marginTop: '8px',
+                          }}
+                        >
+                          {season.rules.map((rule) => (
+                            <div
+                              key={rule.id}
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                            >
+                              <span
+                                className="mono"
+                                style={{ fontSize: '11px', color: 'var(--text-dim)' }}
+                              >
+                                {rule.torrentHash.substring(0, 8)}
+                              </span>
+                              <span className="badge neutral" style={{ fontSize: '10px' }}>
+                                {rule.numbering}
+                              </span>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: '11px' }}
+                                onClick={() => onEditRule(rule.torrentHash, rule.id)}
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
