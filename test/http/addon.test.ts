@@ -3,6 +3,7 @@ import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
 import { config } from '../../src/config.js';
 import { build } from '../../src/http/server.js';
+import { parseStreamId } from '../../src/http/routes/addon/stream.js';
 
 interface SeedOptions {
   confidence?: number;
@@ -48,7 +49,7 @@ describe('addon routes: manifest + token auth (no DB needed)', () => {
     const body = response.json();
     expect(body.types).toEqual(['series']);
     expect(body.resources).toEqual(['stream']);
-    expect(body.idPrefixes).toEqual(['tt']);
+    expect(body.idPrefixes).toEqual(['tt', 'tmdb:']);
     await app.close();
   });
 
@@ -64,6 +65,39 @@ describe('addon routes: manifest + token auth (no DB needed)', () => {
     const response = await app.inject({ method: 'GET', url: '/manifest.json' });
     expect(response.statusCode).toBe(404);
     await app.close();
+  });
+});
+
+describe('parseStreamId (pure, no DB needed)', () => {
+  it('parses an imdb-shaped id', () => {
+    expect(parseStreamId('tt1234567:3:8')).toEqual({
+      scheme: 'imdb',
+      id: 'tt1234567',
+      season: 3,
+      episode: 8,
+    });
+  });
+
+  it('parses a tmdb-shaped id -- AIOStreams sometimes resolves via TMDB, not IMDb', () => {
+    expect(parseStreamId('tmdb:250793:3:3')).toEqual({
+      scheme: 'tmdb',
+      id: 250793,
+      season: 3,
+      episode: 3,
+    });
+  });
+
+  it.each([
+    ['tt1234567', 'too few parts'],
+    ['tt1234567:3', 'too few parts'],
+    ['tt1234567:3:8:extra', 'too many parts, not tmdb-prefixed'],
+    ['tt1234567:x:8', 'non-numeric season'],
+    ['tt1234567:3:x', 'non-numeric episode'],
+    ['tmdb:x:3:8', 'non-numeric tmdb id'],
+    ['tmdb:250793:x:8', 'non-numeric season (tmdb)'],
+    [':3:8', 'empty imdb id'],
+  ])('returns null for %s (%s)', (input) => {
+    expect(parseStreamId(input)).toBeNull();
   });
 });
 
@@ -134,6 +168,41 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
       url: `/${config.addonToken}/stream/series/tt7654321:1:1.json`,
     });
     expect(response.json().streams[0].behaviorHints.notWebReady).toBe(true);
+    await app.close();
+  });
+
+  it('resolves a tmdb-sourced id the same as an imdb one (found verifying against a real account)', async () => {
+    const tmdbId = 250793;
+    const title = await pool.query(
+      `insert into titles (name_ru, tmdb_id) values ('Show', $1) returning id`,
+      [tmdbId],
+    );
+    const titleId = title.rows[0].id as string;
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h3', 1003, 'Show', now())`,
+    );
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('h3', $1, 3, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [titleId],
+    );
+    const file = await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h3', 1, '01.mp4', 100, true) returning id`,
+    );
+    await pool.query(
+      `insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 3, 3, $3)`,
+      [file.rows[0].id, titleId, rule.rows[0].id],
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/${config.addonToken}/stream/series/tmdb:${tmdbId}:3:3.json`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().streams).toHaveLength(1);
     await app.close();
   });
 

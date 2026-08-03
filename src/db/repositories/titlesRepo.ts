@@ -26,13 +26,22 @@ function toTitle(row: TitleRow): Title {
 }
 
 /**
- * Read-only lookup for the addon's stream route (Milestone 3): resolves the
- * `tt...` id in a Stremio stream request to our internal title id.
+ * Read-only lookups for the addon's stream route (Milestone 3): resolve the
+ * id in a Stremio/AIOStreams stream request to our internal title id.
+ * Real-world clients don't only send `tt...` ids -- AIOStreams in
+ * particular resolves some titles via TMDB instead (`tmdb:250793:...`),
+ * found verifying this against a real account, hence both lookups.
  * `findOrCreate` (writing new title rows from the Labeller UI's show picker)
  * is Milestone 4 scope and deliberately not built here.
  */
 export async function findByImdbId(imdbId: string): Promise<Title | null> {
   const result = await pool.query('select * from titles where imdb_id = $1', [imdbId]);
+  const row = result.rows[0];
+  return row ? toTitle(titleRowSchema.parse(row)) : null;
+}
+
+export async function findByTmdbId(tmdbId: number): Promise<Title | null> {
+  const result = await pool.query('select * from titles where tmdb_id = $1', [tmdbId]);
   const row = result.rows[0];
   return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
