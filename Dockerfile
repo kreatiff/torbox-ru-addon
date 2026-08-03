@@ -15,6 +15,12 @@ WORKDIR /app/ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 COPY ui ./
+# App.tsx imports resolve/expandRule.ts + resolve/types.ts directly from the
+# backend source (plan.md: the UI reaches expandRule/numbering as real
+# runtime imports since they're dependency-free, rather than duplicating
+# the logic) -- needs the sibling src/ tree physically present for
+# TypeScript to resolve those relative imports.
+COPY src /app/src
 RUN npm run build
 # vite.config.ts's outDir "../dist/ui" (relative to WORKDIR /app/ui) lands
 # at /app/dist/ui inside this stage.
