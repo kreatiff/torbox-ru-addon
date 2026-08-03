@@ -39,23 +39,27 @@ Tier-1 open items didn't need to be resolved all at once) and is now committed a
 
 ## Build environment constraints discovered along the way
 
-The sandbox this was built in turned out to have no outbound network path to either
-`api.torbox.app` or Docker Hub (an organization-level egress policy denies both at the proxy).
-That shaped how Milestones 1-2 got verified:
+The sandbox this was built in initially had no outbound network path to either `api.torbox.app`
+or Docker Hub (an organization-level egress policy denied both at the proxy — confirmed via the
+proxy's own status endpoint, a clean 403 policy denial rather than a timeout). That shaped how
+Milestones 1-2 got verified:
 
-- **No live TorBox API access**, ever, from this session. `src/torbox/schemas.ts` is a
-  best-effort reconstruction of the response shape from the spec's own data model and general
-  knowledge of the API, not a live-verified one. The zod-at-every-boundary discipline the spec
-  asked for (§5.1) is exactly what makes this safe to ship anyway: a wrong field name degrades
-  to a loud, logged parse failure instead of silent bad data.
-- **No Docker image ever got built.** `docker-compose.yml`/`Dockerfile` are validated for
-  syntax (`docker compose config`) but the actual `linux/arm64` build is unverified until it
-  runs on the real Oracle Cloud host.
+- **No live TorBox API access** during Milestones 1-2. `src/torbox/schemas.ts` was a best-effort
+  reconstruction of the response shape from the spec's own data model and general knowledge of
+  the API, not a live-verified one. The zod-at-every-boundary discipline the spec asked for
+  (§5.1) is exactly what made this safe to ship anyway: a wrong field name degrades to a loud,
+  logged parse failure instead of silent bad data.
+- **No Docker image got built** during Milestones 1-2. `docker-compose.yml`/`Dockerfile` were
+  only validated for syntax (`docker compose config`).
 - Everything else — migrations, the full DB layer, the ingest pipeline's branching logic,
   `expandRule`, the materialization path from hand-written SQL rules to real `mappings` rows —
   **was** verified, against a real Postgres 16 instance (installed directly in the sandbox via
-  apt, since even `postgres:16` from Docker Hub was unreachable). See
-  [`milestones.md`](./milestones.md) for exactly what was and wasn't verified per milestone.
+  apt, since even `postgres:16` from Docker Hub was unreachable at the time).
+
+The repo owner then opened up the sandbox's network policy (see timeline item 7 below), which
+unblocked both of those and led to a real bug being found and fixed. See
+[`milestones.md`](./milestones.md) for exactly what is and isn't verified per milestone as of
+right now.
 
 ## Timeline
 
@@ -80,6 +84,16 @@ That shaped how Milestones 1-2 got verified:
    direct git push nor this session's repo-access mechanism could reach it). This `docs/`
    directory is the resulting alternative: the same content, committed to the main repo instead,
    copyable into the wiki by hand in a couple of minutes if still wanted there.
+7. Told the sandbox's network policy had been opened up to unrestricted internet access;
+   verified this directly rather than assuming. `api.torbox.app` turned out to be reachable, and
+   a live (invalid-token) request came back with exactly the envelope shape the client code
+   already expected. Docker Hub was reachable too, so the real multi-stage Dockerfile got built
+   and run for the first time — against real Postgres, through to a real (failed, on the bad
+   token) TorBox API call — which surfaced a genuine bug (an unhandled `Pool` `'error'` event
+   crashing the process on a DB-unreachable-at-boot condition) that got fixed on the spot. A
+   true `linux/arm64` build still isn't possible here (the sandbox's nested-Docker QEMU
+   emulation doesn't work), so that one piece is verified on native architecture instead — see
+   `milestones.md` and `decisions.md` for the details.
 
 ## See also
 

@@ -20,11 +20,20 @@ repository and pipeline branching logic (inline files vs. per-id fallback, mark-
 reactivation, the empty-response safety guard) tested against real Postgres; a full compiled
 boot of `src/index.ts` runs config → migrate → ingest → clean exit correctly.
 
-**Not verified:** the TorBox API integration against a live account (no network path to
-`api.torbox.app` from the build sandbox — see `history.md`), and the actual ARM64 Docker image
-build (same limitation, for Docker Hub). Both are unverified, not known-broken — the code is
-written defensively (zod at every boundary) specifically so a real-world mismatch surfaces as a
-loud logged error instead of silent bad data.
+**Updated once the build sandbox's network policy opened up:** `api.torbox.app` became
+reachable, and a live (invalid-token) request confirmed the envelope shape in
+`envelope.ts`/`schemas.ts` matches the real API exactly. Docker Hub also became reachable, so
+the actual multi-stage Dockerfile was built and run for real — migrate → attempt ingest → hit
+the live API → fail cleanly on the bad token, no crash — against real Postgres. That run
+surfaced and fixed a genuine bug: `pg.Pool` had no `'error'` listener and `migrateUp()` wasn't
+wrapped in error handling, so a DB-unreachable-at-boot condition crashed the process instead of
+exiting cleanly (see `decisions.md`).
+
+**Still not verified:** a successful ingest against a real account (no `TORBOX_API_KEY` is
+available in this environment), and a true `linux/arm64` build (this sandbox's nested-Docker
+QEMU emulation is non-functional — confirmed by isolating the failure down to `uname -m` under
+`--platform linux/arm64` failing the same way — so the image was validated on the host's native
+architecture instead; nothing in the codebase is architecture-specific).
 
 **To actually run this for real, the repo owner needs to:** supply a real `TORBOX_API_KEY`,
 and run `docker compose up` on the actual Oracle Cloud ARM64 host.

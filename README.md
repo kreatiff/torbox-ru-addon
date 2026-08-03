@@ -29,16 +29,25 @@ silently — see `torbox-ru-addon-plan.md`, or search this codebase for `§3.`
 comments, which point back at the specific spec section each decision
 responds to.
 
-**Not yet verified against the real TorBox API.** The sandbox this was built
-in has no network path to `api.torbox.app` or Docker Hub (org egress
-policy), so `src/torbox/schemas.ts` is a best-effort reconstruction from the
-spec's own data model rather than a live-verified response shape, and the
-Docker image has never actually been built/run. Everything else — migrations,
-the full DB layer, the ingest pipeline's branching logic (inline files vs.
-per-id fallback, mark-gone, re-activation) — is tested against a real
-Postgres 16 and passes. The first real `docker compose up` on the actual
-Oracle Cloud host is the real test of the TorBox-facing code; expect to patch
-field names in `schemas.ts` from whatever the real response logs.
+**TorBox API connectivity and the real ARM64-targeted Dockerfile are now
+verified**, once the build sandbox's network policy was opened up. Confirmed
+against the live API (with an invalid token, since no real account is
+available here): the envelope shape `{success, error, detail, data}` in
+`src/torbox/envelope.ts`/`schemas.ts` matches exactly what
+`api.torbox.app` actually returns on an auth error. The full multi-stage
+Dockerfile builds successfully and the resulting image, run against real
+Postgres, correctly migrates, attempts ingest, hits the real API, and fails
+cleanly on the bad token — no crash. That verification pass also caught and
+fixed a real bug: `pg.Pool` had no `'error'` listener and `migrateUp()`
+wasn't wrapped in error handling, so a DB-unreachable-at-boot condition
+crashed the process instead of failing gracefully (see `decisions.md`).
+
+**Still not verified:** an actual *successful* ingest against a real TorBox
+account (no API key is available in this environment — only connectivity
+and the error-response shape were confirmed), and a true `linux/arm64` build
+(this sandbox's nested-Docker QEMU emulation doesn't work — even `uname -m`
+fails under it — so the Dockerfile was validated on the host's native
+architecture instead; nothing in the codebase is architecture-specific).
 
 ## Setup
 

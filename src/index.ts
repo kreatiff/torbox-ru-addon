@@ -12,12 +12,11 @@ import { runIngest } from './ingest/pipeline.js';
 
 logger.info({ nodeEnv: process.env.NODE_ENV }, 'torbox-ru starting (Milestone 1: ingest only)');
 
-await migrateUp();
-
 try {
+  await migrateUp();
   await runIngest();
 } catch (err) {
-  logger.error({ err }, 'ingest run failed');
+  logger.error({ err }, 'startup failed (migration or ingest)');
   process.exitCode = 1;
 } finally {
   await pool.end();
