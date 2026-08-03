@@ -12,19 +12,20 @@ access to (see `docs/history.md`).
 
 ## Status
 
-**Milestones 1-3 of 6 done and merged (locked build order, spec §6); Milestone
-4 built and reviewed on its own branch, not yet merged.** Ingest (TorBox
-client, schema, migrations, `mylist` → Postgres with snapshots) plus
-`expandRule`: pure, exhaustively tested, and verified end to end against two
-hand-written SQL rules using the real examples from spec §1 (see
-`scripts/seed/milestone-2-example.sql`, `test/ingest/materialize.test.ts`).
+**Milestones 1-4 of 6 done and merged (locked build order, spec §6); Milestone
+6's Health screen already shipped early as part of Milestone 4 (see below).**
+Ingest (TorBox client, schema, migrations, `mylist` → Postgres with
+snapshots) plus `expandRule`: pure, exhaustively tested, and verified end to
+end against two hand-written SQL rules using the real examples from spec §1
+(see `scripts/seed/milestone-2-example.sql`, `test/ingest/materialize.test.ts`).
 Three of the four `numbering` modes are implemented (`sequential`,
 `continuous`, `manual`); `parsed` throws a clear not-yet error until the
 extractor cascade lands in Milestone 5, per the locked build order. The
 Stremio-facing addon (`/manifest.json`, `/stream/series/:id.json`,
 `/play/:fileId` — see "Milestone 3: the addon" below) is built. The admin
-Labeller UI (see "Milestone 4: admin UI" below) is built and reviewed on the
-`milestone4` branch, awaiting merge.
+Labeller UI (see "Milestone 4: admin UI" below) is built, reviewed, and
+merged, including a follow-up that made already-mapped rules editable from
+the Library view, not just creatable fresh from the Queue.
 
 A handful of decisions the spec left open (confidence formula, numbering-mode
 semantics, an additive `provider_seasons` table, a couple of others) were
@@ -259,6 +260,18 @@ button that opens the Labeller pre-filled with that rule's season, numbering,
 sort, exceptions, and show — change anything and save to update it in place
 (or move it to a different season; the old rule and its mappings are cleaned
 up automatically rather than left behind).
+
+In the Library tab's episode-coverage grid, a green box means exactly one
+file is mapped to that episode; orange means more than one file mapped to
+the same episode number (hover for a tooltip listing which files — this can
+be intentional, e.g. two overlapping torrents kept as alternate sources for
+the same episode, or it can mean a rule picked up an extra file it shouldn't
+have); an empty/bordered-only box means no file is mapped to that episode at
+all.
+
+**Known gap:** there's no way yet to delete a rule/mapping for a torrent
+that's gone from TorBox. The Health tab's "Gone Torrents" and "Dangling
+Mappings" numbers are read-only diagnostics with no delete action attached.
 
 With the server running and a real `ADMIN_USER`/`ADMIN_PASS`:
 
