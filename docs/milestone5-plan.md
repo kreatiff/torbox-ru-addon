@@ -58,26 +58,22 @@ already moot (resolved by what shipped); two are the real gate:
    Nothing to re-litigate; only `parsed`'s own cascade (§3.5) is new work.
 2. **`provider_seasons` schema addition (§3.2) — de facto resolved.** Implemented and in active
    use since Milestone 4 (TMDB season caching in `POST /api/rules`). Nothing to re-litigate.
-3. **Confidence materialisation: the three-way split (§3.3) — needs real sign-off.** The
-   proposed reading (high → insert rule + materialise mappings live; medium → insert + materialise
-   but flag `⚠` in the stream description; positional-fallback-only → insert the rule but
-   **withhold** `rebuildMappings`, so it sits in the Queue producing zero streams until a human
-   accepts it) is a hard floor, not a score threshold — it changes what "queued" _means_
-   (a rule that exists but is inert vs. one that's live-but-flagged). Getting this wrong is
-   precisely the §9 failure mode. **This has to be confirmed, not assumed, before `proposeRule`
-   writes anything to the `rules` table.**
-4. **The confidence formula itself (§3.4) — needs sign-off on the mechanism, not the exact
-   numbers.** The strawman (weighted signal sum, normalised over _applicable_ signals only, a
-   high tier requiring both a score threshold **and** at least one high-weight signal actually
-   firing — not just a pile of mediums summing high) is explicitly offered as "a strawman for
-   reaction... I'll tune it against `test/fixtures/` regardless." The tuning happens during this
-   milestone either way; what needs confirming up front is the _shape_ of the rule (hard floor
-   for positional-only, the two-tier high-bar), since that shape is what the fixture tests below
-   get written against.
+3. **Confidence materialisation: the three-way split (§3.3) — ✅ confirmed.** High → insert
+   rule + `rebuildMappings` immediately (live, no flag); medium → insert + `rebuildMappings` but
+   flag `⚠` in the stream description; positional-fallback-only → insert the rule but **withhold**
+   `rebuildMappings` (inert — shows in Queue, produces zero streams until a human accepts it).
+   The positional-fallback-only tier is a **cascade-stage gate**, not a score floor: it fires
+   when stage 5 (positional/natural-sort fallback) was the only cascade stage that matched,
+   regardless of the final score. See `docs/decisions.md` §"Milestone 5 pre-implementation
+   sign-offs".
+4. **The confidence formula itself (§3.4) — ✅ confirmed (shape locked; thresholds tuned during
+   implementation).** Weighted signal sum, normalised over _applicable_ signals only; positional
+   floor evaluated categorically first; HIGH requires score ≥ 0.75 **and** at least one
+   high-weight signal fired; MEDIUM requires score ≥ 0.45 (and not positional-floor). Full signal
+   weight table in `docs/decisions.md` §"Milestone 5 pre-implementation sign-offs".
 
-**Recommendation:** confirm 3/4 before writing `src/resolve/confidence.ts` (step 4 below);
-everything through step 3 (normalize/extract) is unaffected by the answer and can start
-immediately.
+**Both gate items confirmed.** Step 4 (`src/resolve/confidence.ts`) is unblocked; steps 1–3 can
+proceed in parallel.
 
 ## Detailed build plan
 
@@ -187,7 +183,8 @@ real, messy, already-scrutinised inputs instead of each test file inventing its 
 
 ### Step 4 — `src/resolve/confidence.ts` + `proposeRule.ts` (spec §5.3)
 
-_(Gated on sign-off items 3/4 above.)_
+(Sign-offs 3/4 confirmed — this step is unblocked. See `docs/decisions.md` §"Milestone 5
+pre-implementation sign-offs".)
 
 ```
 src/resolve/
@@ -210,15 +207,11 @@ src/resolve/
   "throws by design" stub. This is the one existing file this milestone actually _changes_
   rather than just adding alongside.
 
-**Open question worth deciding now, not during implementation:** the `rules` table has no column
-for `proposeRule`'s explanation string — only `confidence`/`source`. Two options: (a) add an
-additive `rules.proposal_reason text` column (same pattern already used for `provider_seasons` —
-a small migration, flagged for sign-off, not touching existing columns), or (b) don't persist it
-and recompute the explanation on demand whenever the Queue is queried (cheap, since it's the same
-pure `confidence.ts` logic re-run against already-fetched data, but means the explanation can
-silently drift from what was true at proposal time if e.g. `provider_seasons` gets refreshed
-later). Recommend (a): it's cheap, consistent with how `raw_name_at_ingest` is already treated as
-an immutable snapshot of what was true when a decision was made, and avoids the drift case.
+**Resolved: option (a) confirmed.** A new nullable `rules.proposal_reason text` column will be
+added via an additive migration (no existing columns touched). This is an immutable snapshot of
+the evidence present at proposal time — consistent with how `raw_name_at_ingest` is treated
+elsewhere, and avoids silent drift if `provider_seasons` is refreshed after the proposal is made.
+See `docs/decisions.md` §"Milestone 5 pre-implementation sign-offs".
 
 ### Step 5 — Wire into the ingest pipeline (spec §5.2, step 5 of 7)
 
