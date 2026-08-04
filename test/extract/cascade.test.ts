@@ -109,7 +109,10 @@ describe('cascade', () => {
 
     expect(result.airDate).toEqual({
       date: '2026-07-12',
-      raw: 'эфиp oт 12.07.2026',
+      // 'т' folds to Latin 't' here too, not just 'о'->'o' -- see
+      // homoglyphMap.ts's case-symmetry invariant (normalise.test.ts has
+      // the dedicated regression test for why both cases must fold).
+      raw: 'эфиp ot 12.07.2026',
     });
   });
 
