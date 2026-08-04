@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { cascade } from '../../src/extract/cascade.js';
 import { normalise } from '../../src/normalize/normalise.js';
 
-function file(id: number, path: string, isVideo = true) {
-  return { id, path, isVideo };
+function file(id: number, path: string, isVideo = true, size?: number) {
+  return { id, path, isVideo, size };
 }
 
 describe('cascade', () => {
@@ -84,6 +84,21 @@ describe('cascade', () => {
       { episode: 2, stage: 'positional' },
       { episode: 3, stage: 'positional' },
     ]);
+  });
+
+  it('drops a size-outlier file from positional numbering instead of shifting every index (spec §3.5 stage 5)', () => {
+    const result = cascade('Some Show 1 сезон', [
+      file(1, 'sample.mp4', true, 20_000_000), // ~2% of the real episodes' size
+      file(2, 'a.mp4', true, 1_000_000_000),
+      file(3, 'b.mp4', true, 1_050_000_000),
+      file(4, 'c.mp4', true, 980_000_000),
+    ]);
+
+    const bySize = new Map(result.files.map((f) => [f.fileId, f]));
+    expect(bySize.get(1)).toMatchObject({ episode: null, stage: 'positional' });
+    expect(bySize.get(2)).toMatchObject({ episode: 1, stage: 'positional' });
+    expect(bySize.get(3)).toMatchObject({ episode: 2, stage: 'positional' });
+    expect(bySize.get(4)).toMatchObject({ episode: 3, stage: 'positional' });
   });
 
   it('extracts air dates from the torrent name', () => {

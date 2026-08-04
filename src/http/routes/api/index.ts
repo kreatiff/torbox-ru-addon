@@ -15,6 +15,7 @@ import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../met
 import { runIngest } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { naturalCompare } from '../../../extract/naturalSort.js';
+import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
 
 const saveRuleBodySchema = z.object({
   torrentHash: z.string(),
@@ -65,9 +66,10 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
        left join files f on f.torrent_hash = t.hash and f.is_video = true
        left join rules r on r.torrent_hash = t.hash
        where t.status = 'active'
-         and (r.id is null or (r.source = 'auto' and (r.title_id is null or r.confidence < 0.45)))
+         and (r.id is null or (r.source = 'auto' and (r.title_id is null or r.confidence < $1)))
        group by t.hash, r.id
        order by t.first_seen desc`,
+      [MEDIUM_SCORE_THRESHOLD],
     );
 
     const queueItems = result.rows.map((row) => {

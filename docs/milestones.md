@@ -233,15 +233,45 @@ placeholders: `GET /api/queue` surfaces real auto-proposals (including `proposal
 the Labeller's `parsed` option is enabled. Additive migrations added `rules.proposal_reason` and
 `rules.torrent_name`.
 
-**Verified:** `npm run typecheck && npm run lint && npm test` is green (77 passing, DB tests
-skipped in the no-Postgres sandbox). New fixture-driven tests cover the three spec §1 examples
-and the confidence tiers; `expandRule.test.ts` now exercises real `parsed` mode instead of the
-old "not implemented" stub.
+**Verified:** `npm run typecheck && npm run lint && npm test` is green — 126 tests across 20
+files, run against a real local Postgres (not just the DB-skipped mode; the first implementation
+pass claimed this was green but had only actually been run without `TEST_DATABASE_URL` set, which
+hid two real regressions — see the review-fix entry below). New fixture-driven tests cover the
+three spec §1 examples and the confidence tiers; `expandRule.test.ts` now exercises real `parsed`
+mode instead of the old "not implemented" stub.
+
+**Fixed after a review pass found the categorical gates weren't actually gating anything** — the
+exact §9 failure mode this milestone exists to prevent, present in the first implementation:
+
+- `proposeRule` called `computeConfidence` with `hasConfidentTitleMatch` hardcoded to `true`
+  regardless of whether a title actually matched, and `runIngest`'s auto-commit decision checked
+  `proposal.confidence >= 0.45` (a raw score) instead of the confidence tier. Net effect: a
+  proposal that hit categorical gate #2 or #3 (declared `X из Y` mismatched, or a majority of
+  files needed positional fallback) could still score into MEDIUM via other signals — e.g. every
+  file cleanly SxxExx-matched despite the file count contradicting the declared count — and get
+  auto-committed anyway, live streams and all.
+- Even after gating the initial commit decision on tier, `rebuildAllMappings()` — the pre-existing
+  step that reprocesses every rule on every ingest — had no concept of "still pending review" and
+  would silently re-materialise a withheld auto-proposal's mappings on the very next run. Fixed by
+  giving `rebuildAllMappings()` the same "pending review" check `GET /api/queue` already uses
+  (`source: 'auto'` and `confidence` below the MEDIUM floor), and having `proposeRule` clamp the
+  persisted `confidence` below that floor whenever a categorical gate fires (the raw score stays
+  visible in `proposal_reason`'s text either way).
+- Two secondary gaps from the same pass: the positional-fallback penalty formula didn't match
+  `decisions.md`'s signed-off shape (a discontinuity at the 50% gate boundary that under-penalised
+  most of the 0-50% range); and spec §3.5 stage 5's "drop size outliers" was entirely unimplemented
+  in the positional fallback, so a misclassified trailer/sample would have shifted every subsequent
+  episode index. Both fixed, with new tests.
+
+Two stale pre-Milestone-5 tests were also fixed rather than left red: one asserted `numbering:
+'parsed'` always 400s, which stopped being true now that `parsed` is real; the other manually
+inserted a rule mid-test in a way that now collides with the new eager auto-proposal step.
 
 **Not yet verified at scale:** a real ingest run against the repo owner's live 210-torrent library
 with the new proposal step active. The code is wired to run automatically on every ingest, but
-it has not been exercised against real messy torrent names beyond the three recorded fixtures.
-Spot-checking the real library is the next step before declaring this fully production-safe.
+it has not been exercised against real messy torrent names beyond the three recorded fixtures and
+the gate-focused fixtures added during the review-fix pass. Spot-checking the real library is the
+next step before declaring this fully production-safe.
 
 **One intentional simplification vs. the plan:** title matching is exact/near-exact string match
 against existing `titles` rows or a single unambiguous TMDB result; no fuzzy NLP. The confidence

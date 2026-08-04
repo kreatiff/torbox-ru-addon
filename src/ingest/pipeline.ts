@@ -235,7 +235,7 @@ export async function runIngest(): Promise<IngestSummary> {
       continue;
     }
 
-    const proposal = proposeRule(
+    const { proposal, tier } = proposeRule(
       { hash: torrent.hash, rawNameAtIngest: torrent.rawNameAtIngest },
       files,
       titleMatch,
@@ -245,7 +245,11 @@ export async function runIngest(): Promise<IngestSummary> {
       const saved = await upsertRule(proposal);
       proposalsCreated++;
 
-      if (titleMatch && proposal.confidence >= 0.45) {
+      // Materialise mappings for high/medium tiers only -- any categorical
+      // gate (title/xOfY/positional) forces 'queue' regardless of the raw
+      // score, and the rule must stay inert (visible in the Queue, no
+      // streams) until a human accepts it. See docs/decisions.md.
+      if (tier === 'high' || tier === 'medium') {
         try {
           await rebuildMappingsForRule(saved.id);
           proposalsAutoCommitted++;

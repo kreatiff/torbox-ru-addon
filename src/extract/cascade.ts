@@ -9,6 +9,13 @@ import { parseEpisodeNumber } from './episodeNumber.js';
 import { originalEpisodeWordsList } from './vocabulary.js';
 import type { MaskConfig } from './qualityCodecTokens.js';
 
+// Spec §3.5 stage 5: "drop size outliers" before index -> episode. A file
+// under 30% of the median size among the files still needing positional
+// numbering is almost certainly a trailer/sample misclassified as video,
+// not a real episode -- assigning it an index would shift every episode
+// number after it.
+const SIZE_OUTLIER_RATIO = 0.3;
+
 // Season marker is extracted from the original torrent name because the
 // Cyrillic word "сезон" folds to mixed-script "ceзoн" under normalisation,
 // making the original string a more reliable extraction target.
@@ -139,6 +146,7 @@ export interface FileWithSource {
   id: number;
   path: string;
   isVideo: boolean;
+  size?: number;
 }
 
 export interface CascadeFileResult {
@@ -178,6 +186,7 @@ export function cascade(
 
   const videoFiles = files.filter((f) => f.isVideo);
   const isSingleFile = videoFiles.length === 1;
+  const sizeById = new Map(videoFiles.map((f) => [f.id, f.size]));
 
   const parsedFiles: CascadeFileResult[] = videoFiles.map((file) => {
     const source = isSingleFile ? torrentNameNormalised : normalise(file.path);
@@ -195,9 +204,24 @@ export function cascade(
     };
   });
 
-  // Resolve positional episodes: natural sort, then index → episode.
+  // Resolve positional episodes: drop size outliers, natural sort what's
+  // left, then index → episode. A dropped outlier keeps stage 'positional'
+  // with no episode assigned (still counts as a fallback for confidence
+  // scoring, just never numbered).
   const positionalFiles = parsedFiles.filter((f) => f.stage === 'positional');
-  const sorted = [...positionalFiles].sort((a, b) => naturalCompare(a.path, b.path));
+  const positionalSizes = positionalFiles
+    .map((f) => sizeById.get(f.fileId))
+    .filter((s): s is number => s !== undefined)
+    .sort((a, b) => a - b);
+  const medianSize =
+    positionalSizes.length > 0
+      ? (positionalSizes[Math.floor((positionalSizes.length - 1) / 2)] as number)
+      : null;
+  const inScope = positionalFiles.filter((f) => {
+    const size = sizeById.get(f.fileId);
+    return medianSize === null || size === undefined || size >= medianSize * SIZE_OUTLIER_RATIO;
+  });
+  const sorted = [...inScope].sort((a, b) => naturalCompare(a.path, b.path));
   for (let i = 0; i < sorted.length; i++) {
     const file = sorted[i];
     if (file) {

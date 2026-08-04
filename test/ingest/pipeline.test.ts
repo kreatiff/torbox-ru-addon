@@ -140,6 +140,28 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
   });
 
   it('rebuilds mappings for a pre-existing rule on every run', async () => {
+    // Insert the torrent, files, and rule directly rather than via a first
+    // runIngest() call: since Milestone 5, an unruled active torrent gets
+    // auto-proposed a rule on its very first ingest, which would collide
+    // with the manual rule this test inserts below. Pre-seeding the rule
+    // means the torrent is never "unruled" in the first place, keeping this
+    // test isolated to what it actually checks -- rebuildAllMappings()
+    // against a rule that already existed before ingest ran.
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('hash-e', 6, 'Show', now())`,
+    );
+    await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('hash-e', 60, '01.mp4', 1, true), ('hash-e', 61, '02.mp4', 1, true)`,
+    );
+    const title = await pool.query(`insert into titles (name_ru) values ('Show') returning id`);
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('hash-e', $1, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [title.rows[0].id],
+    );
+
     stubTorboxApi({
       mylist: [
         {
@@ -153,14 +175,6 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
         },
       ],
     });
-    await runIngest();
-
-    const title = await pool.query(`insert into titles (name_ru) values ('Show') returning id`);
-    const rule = await pool.query(
-      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
-       values ('hash-e', $1, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
-      [title.rows[0].id],
-    );
 
     const summary = await runIngest();
     expect(summary.rulesRebuilt).toBe(1);
@@ -174,5 +188,74 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
       { season: 1, episode: 1 },
       { season: 1, episode: 2 },
     ]);
+  });
+
+  it('auto-proposes and auto-commits a rule for an unruled torrent when it cleanly matches an existing title', async () => {
+    await pool.query(`insert into titles (name_ru) values ('Clean Show')`);
+    stubTorboxApi({
+      mylist: [
+        {
+          id: 7,
+          hash: 'hash-f',
+          name: 'Clean Show 1 сезон 2 из 2 выпуск',
+          files: [
+            { id: 70, name: 'Clean.Show.s01.E01.mp4', size: 1_000_000_000 },
+            { id: 71, name: 'Clean.Show.s01.E02.mp4', size: 1_000_000_000 },
+          ],
+        },
+      ],
+    });
+
+    const summary = await runIngest();
+    expect(summary.proposalsCreated).toBe(1);
+    expect(summary.proposalsAutoCommitted).toBe(1);
+    expect(summary.proposalsQueued).toBe(0);
+
+    const mappings = await pool.query(
+      `select m.episode from mappings m
+       join rules r on r.id = m.rule_id
+       where r.torrent_hash = 'hash-f' order by m.episode`,
+    );
+    expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }]);
+  });
+
+  it('does not materialise mappings for an auto-proposed rule when the X из Y categorical gate fires, even though every file has a clean SxxExx match', async () => {
+    // Regression test: proposeRule/runIngest used to decide auto-commit from
+    // a raw numeric score (>= 0.45) instead of the confidence tier, so a
+    // proposal that hit a categorical gate (declared "5 из 13" but 6 actual
+    // files -- a real red flag per spec §3.4) could still score into MEDIUM
+    // via other signals and get auto-committed anyway.
+    await pool.query(`insert into titles (name_ru) values ('Show')`);
+    stubTorboxApi({
+      mylist: [
+        {
+          id: 8,
+          hash: 'hash-g',
+          name: 'Show 2 сезон 5 из 13 выпуск',
+          files: [1, 2, 3, 4, 5, 6].map((n) => ({
+            id: 80 + n,
+            name: `Show.s02.E0${n}.mp4`,
+            size: 1_000_000_000,
+          })),
+        },
+      ],
+    });
+
+    const summary = await runIngest();
+    expect(summary.proposalsCreated).toBe(1);
+    expect(summary.proposalsAutoCommitted).toBe(0);
+    expect(summary.proposalsQueued).toBe(1);
+
+    const rule = await pool.query(
+      `select confidence, proposal_reason from rules where torrent_hash = 'hash-g'`,
+    );
+    expect(rule.rows[0].proposal_reason).toMatch(/does not match the video file count/);
+
+    const mappings = await pool.query(
+      `select m.episode from mappings m
+       join rules r on r.id = m.rule_id
+       where r.torrent_hash = 'hash-g'`,
+    );
+    expect(mappings.rows).toEqual([]);
   });
 });
