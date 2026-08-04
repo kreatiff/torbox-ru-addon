@@ -762,6 +762,8 @@ function LabellerView({
     exceptions,
     confidence: 1.0,
     source: 'manual',
+    proposalReason: null,
+    torrentName: details.rawNameAtIngest,
   };
 
   // Convert files to RuleFile schema shape

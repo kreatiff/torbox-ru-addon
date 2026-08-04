@@ -73,7 +73,7 @@ export function parseTorrent(torrentName: string): TorrentParseResult {
  */
 export function parseEpisodeSource(
   source: string,
-  torrentParse: TorrentParseResult,
+  _torrentParse: TorrentParseResult,
   config?: MaskConfig,
 ): FileParseResult {
   const masked = maskTokens(source, config);
