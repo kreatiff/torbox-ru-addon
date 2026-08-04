@@ -13,9 +13,6 @@ function toRule(row: RuleRow): Rule {
   if (row.torrent_hash === null) {
     throw new Error(`rule ${row.id} has no torrent_hash`);
   }
-  if (row.title_id === null) {
-    throw new Error(`rule ${row.id} has no title_id`);
-  }
   return {
     id: row.id,
     torrentHash: row.torrent_hash,
@@ -28,6 +25,8 @@ function toRule(row: RuleRow): Rule {
     exceptions: row.exceptions,
     confidence: row.confidence,
     source: row.source,
+    proposalReason: row.proposal_reason ?? null,
+    torrentName: row.torrent_name ?? null,
   };
 }
 
@@ -67,9 +66,9 @@ export async function deleteRule(id: string): Promise<void> {
 }
 
 export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
-  const result = await pool.query(
-    `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  const result =   await pool.query(
+    `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source, proposal_reason, torrent_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      on conflict (torrent_hash, season)
      do update set
        title_id = excluded.title_id,
@@ -79,7 +78,9 @@ export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
        absolute_offset = excluded.absolute_offset,
        exceptions = excluded.exceptions,
        confidence = excluded.confidence,
-       source = excluded.source
+       source = excluded.source,
+       proposal_reason = excluded.proposal_reason,
+       torrent_name = excluded.torrent_name
        -- created_at is intentionally left unchanged: it records when the rule was first created
      returning *`,
     [
@@ -93,6 +94,8 @@ export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
       JSON.stringify(ruleData.exceptions),
       ruleData.confidence,
       ruleData.source,
+      ruleData.proposalReason,
+      ruleData.torrentName,
     ],
   );
   const row = result.rows[0];

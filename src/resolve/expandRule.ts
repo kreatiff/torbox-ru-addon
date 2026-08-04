@@ -27,6 +27,9 @@ function expandByMode(rule: Rule, files: RuleFile[]): Mapping[] {
  * every episode after it).
  */
 export function expandRule(rule: Rule, files: RuleFile[]): Mapping[] {
+  if (rule.titleId === null) {
+    throw new Error(`rule ${rule.id} cannot be expanded: titleId is null`);
+  }
   const videoFiles = files.filter((f) => f.isVideo);
 
   const exceptionMappings: Mapping[] = [];

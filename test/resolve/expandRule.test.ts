@@ -14,6 +14,8 @@ const baseRule: Rule = {
   exceptions: {},
   confidence: 1,
   source: 'manual',
+  proposalReason: null,
+  torrentName: null,
 };
 
 function file(id: number, path: string, isVideo = true): RuleFile {
@@ -107,9 +109,23 @@ describe('expandRule', () => {
   });
 
   describe('parsed', () => {
-    it('throws a clear not-implemented-yet error rather than guessing', () => {
+    it('parses episodes from the torrent name and file paths', () => {
+      const rule: Rule = {
+        ...baseRule,
+        numbering: 'parsed',
+        torrentName: 'My Show 1 сезон 2 из 2 выпуска',
+      };
+      const files = [file(1, '01 выпуск.mp4'), file(2, '02 выпуск.mp4')];
+      const mappings = expandRule(rule, files);
+      expect(mappings).toEqual([
+        { fileId: 1, titleId: 'title-1', season: 1, episode: 1, ruleId: 'rule-1' },
+        { fileId: 2, titleId: 'title-1', season: 1, episode: 2, ruleId: 'rule-1' },
+      ]);
+    });
+
+    it('throws when torrentName is missing for parsed mode', () => {
       const rule: Rule = { ...baseRule, numbering: 'parsed' };
-      expect(() => expandRule(rule, [file(1, 'a.mp4')])).toThrow(/extractor cascade/);
+      expect(() => expandRule(rule, [file(1, 'a.mp4')])).toThrow(/torrentName/);
     });
   });
 

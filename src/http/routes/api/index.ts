@@ -48,6 +48,7 @@ const saveRuleBodySchema = z.object({
   // opposed to creating a fresh one from the Queue) -- lets the handler
   // below clean up the old row if the edit also changed the season.
   ruleId: z.string().optional(),
+  torrentName: z.string().optional(),
 });
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
@@ -57,32 +58,29 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/queue - Torrents needing review
   app.get('/queue', async (_request, _reply) => {
     const result = await pool.query(
-      `select t.hash, t.raw_name_at_ingest, t.first_seen, count(f.id) as file_count
+      `select t.hash, t.raw_name_at_ingest, t.first_seen, count(f.id) as file_count,
+              r.id as rule_id, r.season as rule_season, r.numbering as rule_numbering,
+              r.confidence as rule_confidence, r.proposal_reason, r.torrent_name
        from torrents t
        left join files f on f.torrent_hash = t.hash and f.is_video = true
        left join rules r on r.torrent_hash = t.hash
-       where t.status = 'active' and r.id is null
-       group by t.hash
+       where t.status = 'active'
+         and (r.id is null or (r.source = 'auto' and (r.title_id is null or r.confidence < 0.45)))
+       group by t.hash, r.id
        order by t.first_seen desc`,
     );
 
     const queueItems = result.rows.map((row) => {
-      // Basic fallback show/season proposal using regex heuristics
       const name = row.raw_name_at_ingest;
       let proposedTitle = name;
-      let proposedSeason = 1;
+      const proposedSeason = row.rule_season ?? 1;
 
-      // Clean up common suffix blocks like [...]
+      // Basic fallback show/season proposal using regex heuristics
       const cleanName = name.replace(/\[.*?\]/g, '').trim();
-
-      // Extract Season: e.g., "3 сезон" or "2 season"
       const seasonMatch = cleanName.match(/(\d+)\s*(сезон|season)/i);
       if (seasonMatch && seasonMatch[1]) {
-        proposedSeason = parseInt(seasonMatch[1], 10);
         proposedTitle = cleanName.replace(seasonMatch[0], '').trim();
       }
-
-      // Cleanup extra spaces and special characters
       proposedTitle = proposedTitle.replace(/\s+/g, ' ').trim();
 
       return {
@@ -90,11 +88,13 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
         rawNameAtIngest: name,
         firstSeen: row.first_seen,
         fileCount: parseInt(row.file_count, 10),
+        ruleId: row.rule_id ?? null,
         proposal: {
-          proposedTitle,
+          proposedTitle: row.proposal_reason ? row.torrent_name ?? proposedTitle : proposedTitle,
           proposedSeason,
-          confidence: 0.1,
-          why: 'Proposal engine not built yet (Milestone 5). Text-extracted defaults.',
+          confidence: row.rule_confidence ?? 0.1,
+          why: row.proposal_reason ?? 'Proposal engine not run yet (Milestone 5). Text-extracted defaults.',
+          numbering: row.rule_numbering ?? 'parsed',
         },
       };
     });
@@ -183,18 +183,21 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   app.post('/rules', async (request, reply) => {
     const body = saveRuleBodySchema.parse(request.body);
 
-    // 'parsed' needs the extractor cascade, which isn't built yet
-    // (Milestone 5) -- expandRule throws for this mode by design. Reject
-    // up front rather than writing a rule row and only discovering this
-    // when rebuildMappingsForRule throws below (which would leave a rule
-    // committed with no mappings and a bare 500 for the client). The
-    // Labeller UI already renders this option disabled; this is the same
-    // guarantee enforced at the API boundary, not just the UI.
-    if (body.numbering === 'parsed') {
-      return reply.code(400).send({
-        error:
-          "numbering 'parsed' is not implemented yet (Milestone 5) -- use sequential, continuous, or manual",
-      });
+    // 'parsed' is now implemented (Milestone 5). It needs a stored torrent_name
+    // so expandRule can re-run the extractor cascade; when a human edits an
+    // existing rule we copy it from the raw ingest snapshot.
+    let torrentName = body.torrentName;
+    if (body.numbering === 'parsed' && !torrentName) {
+      const torrentResult = await pool.query(
+        'select raw_name_at_ingest from torrents where hash = $1',
+        [body.torrentHash],
+      );
+      torrentName = torrentResult.rows[0]?.raw_name_at_ingest ?? null;
+      if (!torrentName) {
+        return reply.code(400).send({
+          error: "numbering 'parsed' requires the torrent name to be available",
+        });
+      }
     }
 
     let titleId = body.titleId;
@@ -293,6 +296,8 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       exceptions: body.exceptions,
       confidence: 1.0, // Manual rules are 100% confident
       source: 'manual',
+      proposalReason: null,
+      torrentName: torrentName ?? null,
     });
 
     // Rebuild mappings for this rule. The rule is already committed at this

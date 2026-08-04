@@ -1,4 +1,5 @@
 import { naturalCompare } from '../extract/naturalSort.js';
+import { cascade } from '../extract/cascade.js';
 import type { Mapping, Rule, RuleFile } from './types.js';
 
 function sortFiles(files: RuleFile[], sort: Rule['sort']): RuleFile[] {
@@ -54,13 +55,34 @@ export function expandManual(_rule: Rule, _files: RuleFile[]): Mapping[] {
   return [];
 }
 
-/** Per-file text parsing (SxxExx / word+number / air-date / positional
- * fallback) needs the extractor cascade, which doesn't exist yet -- Milestone
- * 5 per the locked build order (spec §6: "Milestone 3 must work before you
- * write any parsing code"). Fails loudly rather than guessing. */
-export function expandParsed(rule: Rule, _files: RuleFile[]): Mapping[] {
-  throw new Error(
-    `rule ${rule.id}: numbering 'parsed' needs the extractor cascade (src/extract/cascade.ts), ` +
-      'which is Milestone 5 scope and not implemented yet',
+/** Per-file text parsing: run the extractor cascade over the torrent name and
+ * file paths, then emit a mapping from each file's parsed episode number. The
+ * cascade already resolves positional fallbacks, so every video file should
+ * yield an episode; any that don't are treated as a hard failure so we don't
+ * silently drop files. */
+export function expandParsed(rule: Rule, files: RuleFile[]): Mapping[] {
+  if (!rule.torrentName) {
+    throw new Error(`rule ${rule.id}: numbering 'parsed' requires torrentName to be set`);
+  }
+
+  const result = cascade(
+    rule.torrentName,
+    files.map((f) => ({ id: f.id, path: f.path, isVideo: f.isVideo })),
   );
+
+  const videoFiles = result.files.filter((f) => f.isVideo);
+  return videoFiles.map((file) => {
+    if (file.episode === null) {
+      throw new Error(
+        `rule ${rule.id}: file ${file.fileId} (${file.path}) could not be assigned an episode by the cascade`,
+      );
+    }
+    return {
+      fileId: file.fileId,
+      titleId: rule.titleId,
+      season: file.season ?? rule.season,
+      episode: file.episode,
+      ruleId: rule.id,
+    };
+  });
 }

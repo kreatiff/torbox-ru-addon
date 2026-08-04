@@ -1,3 +1,4 @@
+import { normalise } from '../../normalize/normalise.js';
 import { pool } from '../pool.js';
 import { titleRowSchema, type TitleRow } from '../schema.types.js';
 
@@ -41,6 +42,29 @@ export async function findByTmdbId(tmdbId: number): Promise<Title | null> {
   const result = await pool.query('select * from titles where tmdb_id = $1', [tmdbId]);
   const row = result.rows[0];
   return row ? toTitle(titleRowSchema.parse(row)) : null;
+}
+
+/** Case-insensitive normalised lookup against existing titles (name + aliases).
+ * Returns null if the match is ambiguous (more than one title with the same
+ * normalised name). */
+export async function findTitleByCleanedName(cleanedName: string): Promise<Title | null> {
+  const target = normalise(cleanedName);
+  const result = await pool.query(
+    `select * from titles
+     where lower(name_ru) = lower($1)
+        or lower(coalesce(name_en, '')) = lower($1)
+        or exists (select 1 from unnest(aliases) a where lower(a) = lower($1))`,
+    [cleanedName],
+  );
+  const matches = result.rows
+    .map((row) => toTitle(titleRowSchema.parse(row)))
+    .filter(
+      (t) =>
+        normalise(t.nameRu) === target ||
+        (t.nameEn && normalise(t.nameEn) === target) ||
+        t.aliases.some((a) => normalise(a) === target),
+    );
+  return matches[0] ?? null;
 }
 
 export async function findOrCreateTitle(

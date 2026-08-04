@@ -1,0 +1,111 @@
+import { describe, it, expect } from 'vitest';
+import { cascade } from '../../src/extract/cascade.js';
+import { normalise } from '../../src/normalize/normalise.js';
+
+function file(id: number, path: string, isVideo = true) {
+  return { id, path, isVideo };
+}
+
+describe('cascade', () => {
+  it('parses Сокровища-style files: leading number + episode word', () => {
+    const result = cascade(
+      'Сокровища императора 3 сезон 8 из 13 выпуск (Ольга Бузова и Михаил Галустян)',
+      [
+        file(1, '01 выпуск.mp4'),
+        file(2, '02 выпуск.mp4'),
+        file(3, '08 выпуск.mp4'),
+      ],
+    );
+
+    expect(result.season).toBe(3);
+    expect(result.xOfY).toEqual({ present: 8, total: 13, raw: '8 из 13' });
+    expect(result.files.map((f) => ({ episode: f.episode, stage: f.stage }))).toEqual([
+      { episode: 1, stage: 'episodeNumber' },
+      { episode: 2, stage: 'episodeNumber' },
+      { episode: 8, stage: 'episodeNumber' },
+    ]);
+  });
+
+  it('parses single-file torrents from the torrent name', () => {
+    const result = cascade(
+      'Bolshoy.Kush.s02.E02.(2026).HDTV.(1080p).by.Nicodem.Files-x',
+      [file(1, 'irrelevant.mp4')],
+    );
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({
+      season: 2,
+      episode: 2,
+      stage: 'seasonEpisode',
+    });
+  });
+
+  it('never lets a leading bare number override an explicit SxxExx', () => {
+    // Spec §3.5 invariant: Bolshoy Kush file has absolute hint 14 but SxxExx is the truth.
+    // Use two files so the cascade parses file paths rather than the torrent name.
+    const result = cascade(
+      'Bolshoy.Kush.s02.E02.(2026).HDTV.(1080p).by.Nicodem.Files-x',
+      [
+        file(1, '14.Большой куш. Бангкок.s02.E02.(2026).HDTV.(1080р).ts'),
+        file(2, '15.Большой куш. Париж.s02.E03.(2026).HDTV.(1080р).ts'),
+      ],
+    );
+
+    expect(result.files[0]).toMatchObject({
+      season: 2,
+      episode: 2,
+      absoluteHint: 14,
+      stage: 'seasonEpisode',
+    });
+  });
+
+  it('masks quality tokens so 1080p is never mistaken for an episode', () => {
+    const result = cascade(
+      'Some.Show.s01.E01.(2026).HDTV.(1080p).by.Nicodem',
+      [file(1, 'Some.Show.s01.E01.(2026).HDTV.(1080р).by.Nicodem.mkv')],
+    );
+
+    expect(result.files[0]).toMatchObject({
+      season: 1,
+      episode: 1,
+      stage: 'seasonEpisode',
+    });
+  });
+
+  it('falls back to positional numbering for files with no episode markers', () => {
+    const result = cascade('Some Show 1 сезон', [
+      file(1, 'a.mp4'),
+      file(2, 'b.mp4'),
+      file(3, 'c.mp4'),
+    ]);
+
+    expect(result.files.map((f) => ({ episode: f.episode, stage: f.stage }))).toEqual([
+      { episode: 1, stage: 'positional' },
+      { episode: 2, stage: 'positional' },
+      { episode: 3, stage: 'positional' },
+    ]);
+  });
+
+  it('extracts air dates from the torrent name', () => {
+    const result = cascade(
+      'Bolshoy.Kush.s02.E02.(2026).HDTV.(1080p).by.Nicodem.Files-x (Эфир от 12.07.2026)',
+      [file(1, 'episode.ts')],
+    );
+
+    expect(result.airDate).toEqual({
+      date: '2026-07-12',
+      raw: 'эфиp oт 12.07.2026',
+    });
+  });
+
+  it('produces a cleaned title for matching', () => {
+    const result = cascade(
+      'Сокровища императора 3 сезон 8 из 13 выпуск (Ольга Бузова и Михаил Галустян) [2026, путешествие]',
+      [file(1, '01 выпуск.mp4')],
+    );
+
+    expect(normalise(result.cleanedTitle)).toBe(
+      normalise('сокровища императора'),
+    );
+  });
+});

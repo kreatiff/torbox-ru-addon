@@ -54,6 +54,8 @@ export const ruleRowSchema = z.object({
   exceptions: z.record(z.string(), ruleExceptionSchema),
   confidence: z.number(),
   source: ruleSourceSchema,
+  proposal_reason: z.string().nullable().optional(),
+  torrent_name: z.string().nullable().optional(),
   created_at: z.date(),
 });
 export type RuleRow = z.infer<typeof ruleRowSchema>;

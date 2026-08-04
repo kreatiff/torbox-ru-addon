@@ -1134,9 +1134,7 @@ function LabellerView({
                     <option value="sequential">sequential</option>
                     <option value="continuous">continuous</option>
                     <option value="manual">manual</option>
-                    <option value="parsed" disabled>
-                      parsed (Unimplemented)
-                    </option>
+                    <option value="parsed">parsed</option>
                   </select>
                 </div>
                 <div className="form-group">

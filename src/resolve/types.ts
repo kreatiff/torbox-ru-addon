@@ -6,7 +6,7 @@
 export interface Rule {
   id: string;
   torrentHash: string;
-  titleId: string;
+  titleId: string | null;
   season: number;
   numbering: 'sequential' | 'parsed' | 'continuous' | 'manual';
   sort: 'natural' | 'path';
@@ -15,6 +15,8 @@ export interface Rule {
   exceptions: Record<string, RuleException>;
   confidence: number;
   source: 'auto' | 'manual';
+  proposalReason: string | null;
+  torrentName: string | null;
 }
 
 export type RuleException = { season: number; episode: number } | 'ignore';
@@ -30,8 +32,10 @@ export interface RuleFile {
 
 export interface Mapping {
   fileId: number;
-  titleId: string;
+  titleId: string | null;
   season: number;
   episode: number;
   ruleId: string;
 }
+
+export type RuleProposal = Omit<Rule, 'id'>;

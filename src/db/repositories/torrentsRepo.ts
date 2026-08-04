@@ -82,6 +82,19 @@ export async function upsertTorrent(input: UpsertTorrentInput): Promise<Torrent>
  * also refuse to call this with an empty list from a suspicious response;
  * this is the last line of defense.
  */
+/** Active torrents that have no rule row yet. This is the same set the Queue UI
+ * shows, and the pipeline proposes rules for them during each ingest run. */
+export async function listActiveUnruledTorrents(): Promise<Torrent[]> {
+  const result = await pool.query(
+    `select t.*
+     from torrents t
+     left join rules r on r.torrent_hash = t.hash
+     where t.status = 'active' and r.id is null
+     order by t.first_seen desc`,
+  );
+  return result.rows.map((row) => toTorrent(torrentRowSchema.parse(row)));
+}
+
 export async function markAbsentGone(presentHashes: string[]): Promise<number> {
   if (presentHashes.length === 0) {
     return 0;
