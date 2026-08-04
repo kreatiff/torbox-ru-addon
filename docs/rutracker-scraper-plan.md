@@ -1,8 +1,12 @@
 # RuTracker feed scraper implementation plan
 
-> Status: proposed, not started. Written against `dev` after Milestone 4 merge.
-> Intended to be implemented after Milestone 5 Step 1 (`src/normalize/`) ships,
-> since `matchEntries` reuses `normalise()` from that module.
+> Status: proposed, not started. Originally written against `dev` after Milestone 4 merge,
+> pending Milestone 5 Step 1 (`src/normalize/`). Milestone 5 has since shipped in full
+> (`src/normalize/`, `src/extract/`, `src/resolve/`, the auto-proposal pipeline step) — the
+> dependency below is satisfied and the shim fallback that used to be needed no longer
+> applies. Revised after review to reuse `src/extract/cascade.ts`'s `parseTorrent()` instead
+> of a bespoke title-stripping regex, fix an upsert gap, and add feed-fetch failure isolation
+> (see inline notes below).
 
 ## What this is
 
@@ -24,10 +28,11 @@ Each `<entry>` in the Atom feed carries:
 - **`<updated>`** — RFC 3339 timestamp — changes when the torrent is updated with new
   episodes (`[Обновлено]` prefix in title)
 
-The title string is the _same_ format as `torrents.raw_name_at_ingest` — meaning the
-Milestone 5 extractor cascade will eventually be able to parse episode numbers out of it.
-For this scraper's matching step, we use `src/normalize/` output only (no extraction
-needed — we're matching by show name, not episode).
+The title string is the _same_ format as `torrents.raw_name_at_ingest`, so the existing
+extractor cascade (`src/extract/cascade.ts`) can parse it directly — no new parsing logic
+needed. This scraper's matching step uses `parseTorrent()` for title-cleaning and season,
+then `normalise()` for the actual comparison; it does not need per-episode extraction
+(`parseEpisodeSource`/the full cascade) since matching is by show name, not episode.
 
 ### What "in my library" means
 
@@ -70,19 +75,38 @@ export type FeedEntry = z.infer<typeof feedEntrySchema>;
   skipped — the same "log and skip" pattern the TorBox client uses for envelope failures.
 - Hard-codes the one forum URL as a default; `RUTRACKER_FEED_URLS` env var (optional,
   comma-separated) overrides it so additional forums can be added without a code change.
+- **Network/parse failures are caught inside `fetchFeed()` itself, per URL, and never
+  thrown to the caller.** A failed GET or a feed that doesn't parse as XML at all is
+  logged with `logger.warn` and treated as zero entries for that URL — the same
+  soft-fail posture `pipeline.ts` already uses for `refreshWebdav()` (a `false` return,
+  not a throw). RuTracker being unreachable must not take down the rest of the ingest
+  run (torrent upsert, mapping rebuild); the feed step is purely additive and optional.
 
 #### [NEW] `matchEntries.ts`
 - `matchEntries(entries: FeedEntry[], titles: TitleRow[]): MatchedEntry[]`
-- For each entry: strip the `[Обновлено]` prefix, strip the bracketed metadata suffix
-  (`[2026, реалити-шоу, ...]`), normalise the remaining prefix with `normalise()`.
+- For each entry: call `parseTorrent(entry.rawTitle)` from `src/extract/cascade.ts` — **do
+  not** reimplement `[Обновлено]`/bracket stripping or season parsing here. Feed entry
+  titles are the same string format as `torrents.raw_name_at_ingest`, and `parseTorrent`
+  already strips brackets, extracts `season` via its `seasonRegex`, and returns
+  `cleanedTitle` — exactly what `resolveTitleMatch` in `src/ingest/pipeline.ts` already
+  does for torrent names. Reusing it here means the two title-cleaning paths (ingest
+  matching and feed matching) can never silently drift apart; a fix to `parseTorrent`'s
+  stripping rules benefits both call sites for free. Normalise the resulting
+  `cleanedTitle` with `normalise()`.
 - For each title: normalise `name_ru` (and `name_en` if set), plus each alias.
 - Match = a normalised entry prefix **starts with** or **contains** any normalised title
-  string (direction: entry prefix ⊇ title name, not the reverse, to handle season
-  suffixes like `Большой куш. Бангкок 2 сезон`).
-- Returns `{ entry, title, season? }` — `season` parsed from the title string by the same
-  vocabulary patterns the extractor uses (a "best effort" here, not the full cascade).
-- No fuzzy matching, no Levenshtein — exact normalised substring only. If it doesn't
-  match, it doesn't match. False negatives are acceptable; false positives are not.
+  string, **at a token boundary** — the match must begin at the start of the entry prefix
+  or immediately follow whitespace, and must end at the end of the prefix or immediately
+  precede whitespace. Plain substring containment is not enough: a title normalised to
+  `дом` must not match inside `домработница`. This still handles the season-suffix case
+  (entry prefix ⊇ title name, not the reverse) — `Большой куш. Бангкок 2 сезон` matches
+  `Большой Куш` because `куш` is followed by `.` which we also treat as a boundary — while
+  refusing to match a title name that's merely a substring of a longer word.
+- Returns `{ entry, title, season? }` — `season` comes directly from `parseTorrent`'s
+  return value, not a separate best-effort parse.
+- No fuzzy matching, no Levenshtein — exact normalised, boundary-checked substring only.
+  If it doesn't match, it doesn't match. False negatives are acceptable; false positives
+  are not.
 
 ---
 
@@ -90,7 +114,7 @@ export type FeedEntry = z.infer<typeof feedEntrySchema>;
 
 ```sql
 CREATE TABLE feed_entries (
-  topic_id      integer       PRIMARY KEY,  -- RuTracker topic ID
+  topic_id      bigint        PRIMARY KEY,  -- RuTracker topic ID
   title_id      uuid          REFERENCES titles(id) ON DELETE SET NULL,
   raw_title     text          NOT NULL,
   url           text          NOT NULL,
@@ -102,10 +126,23 @@ CREATE INDEX feed_entries_title_id_idx ON feed_entries(title_id);
 CREATE INDEX feed_entries_notified_at_idx ON feed_entries(notified_at) WHERE notified_at IS NULL;
 ```
 
+Paired with a `down` migration (`DROP TABLE IF EXISTS feed_entries;`), matching the
+`up`/`down` convention every existing migration in `migrations/` follows.
+
 **Key design decisions:**
 - `topic_id` (not a surrogate uuid) is the PK — the RuTracker topic is the stable
-  external key. `ON CONFLICT (topic_id) DO UPDATE SET last_updated = ...` is the
-  upsert path for `[Обновлено]` entries.
+  external key. `bigint` rather than `integer`: RuTracker's current topic IDs fit
+  comfortably in `integer`, but there's no cost to removing the ceiling now versus a
+  migration later.
+- `ON CONFLICT (topic_id) DO UPDATE SET title_id = excluded.title_id, raw_title =
+  excluded.raw_title, last_updated = excluded.last_updated` — **updates `title_id` and
+  `raw_title`, not just `last_updated`.** This matters because unmatched entries are
+  only stored at all when `RUTRACKER_STORE_UNMATCHED=true`, with `title_id = NULL`; if
+  a matching title is added to the library later (a new show gets labelled) and the
+  same topic reappears in a later feed poll, the row must pick up the new `title_id` on
+  that upsert. Updating only `last_updated` would leave it `NULL` forever even after a
+  real match exists. `raw_title` is refreshed too since `[Обновлено]` changes the title
+  string itself.
 - `title_id` is nullable (SET NULL on cascade) — only matched entries are stored by
   default (see open questions below).
 - `notified_at` is the webhook-readiness flag: `NULL` = "saw this entry, hasn't
@@ -122,12 +159,15 @@ CREATE INDEX feed_entries_notified_at_idx ON feed_entries(notified_at) WHERE not
 
 ### Modified: `src/ingest/pipeline.ts`
 
-A new step inserted between "mark absent gone" and "rebuild mappings":
+A new step inserted between "mark absent gone" and the auto-proposal step (Milestone 5's
+"propose rules for unruled torrents" has since shipped and is already live in
+`pipeline.ts` — the diagram below reflects the pipeline as it exists today, not the
+pre-Milestone-5 state the original version of this plan was written against):
 
 ```
 refresh webdav → fetch mylist → upsert torrents → fetch files → mark absent gone
   → poll feed + match against library + upsert feed_entries   # NEW — this plan
-  → propose rules for unruled torrents                         # Milestone 5
+  → propose rules for unruled torrents                         # existing (Milestone 5)
   → rebuild mappings                                           # existing
   → notify if anything needs review                           # Milestone 6
 ```
@@ -135,7 +175,9 @@ refresh webdav → fetch mylist → upsert torrents → fetch files → mark abs
 The step:
 1. Fetches all `titles` rows from `titlesRepo.listAll()` (a new read, cheap — the table
    is small)
-2. Calls `fetchFeed()` and `matchEntries()`
+2. Calls `fetchFeed()` and `matchEntries()` — `fetchFeed()` never throws (see above); a
+   failed poll just yields zero entries and a logged warning, so the rest of the run
+   (including the proposal step immediately after) proceeds unaffected
 3. Upserts every matched entry into `feed_entries` via `feedEntriesRepo.upsertFeedEntry`
 4. Logs a summary: `{ feedEntriesSeen, feedEntriesMatched, feedEntriesNew }`
 
@@ -168,9 +210,11 @@ constant inside `fetchFeed.ts` — the same pattern as `NOT_WEB_READY_EXTENSIONS
 A new read-only route under the existing `/api` prefix (same Basic Auth as all `/api`
 routes):
 
-- `GET /api/feed` — returns paginated `feed_entries` rows (newest `last_updated` first),
-  with `title_id` joined to `titles.name_ru`. Useful for the Health/Library views to show
-  "new episodes seen in feed since last ingest."
+- `GET /api/feed?limit=&offset=` — returns `feed_entries` rows (newest `last_updated`
+  first), with `title_id` joined to `titles.name_ru`. `limit` defaults to 50, capped at
+  200 (same bound pattern as `GET /api/health`'s `recentPlays limit 50`); `offset`
+  defaults to 0. Useful for the Health/Library views to show "new episodes seen in feed
+  since last ingest."
 
 No write routes — the scraper owns all writes to this table. The Labeller doesn't need
 to interact with it.
@@ -192,19 +236,15 @@ extensibility point. f/939 is the only forum hardcoded; others can be added at r
 
 ---
 
-## Dependency on Milestone 5
+## Dependency on Milestone 5 — resolved
 
-The `matchEntries` title-strip step reuses `normalise()` from `src/normalize/`, which
-Milestone 5's Step 1 builds. The feed scraper does **not** need the full extractor cascade
-— only normalisation, not episode extraction. So:
-- **If `src/normalize/` ships first** (as Milestone 5 intends): use it directly.
-- **If the feed scraper ships before Milestone 5 step 1**: inline a minimal
-  `normalise()` shim (lowercase + collapse whitespace + basic Cyrillic→Latin fold for the
-  most common confusables) inside `src/rutracker/`, then replace it with the real import
-  once `src/normalize/` exists. The shim is safe to swap because `matchEntries` is pure
-  and has no I/O.
-
-**Recommendation:** build this after Milestone 5 Step 1.
+This plan originally gated on Milestone 5 Step 1 (`src/normalize/`) shipping first, with
+a fallback shim `normalise()` in case the feed scraper landed earlier. Milestone 5 has
+since shipped in full: `src/normalize/normalise.ts`, `src/extract/cascade.ts`
+(`parseTorrent`), `src/resolve/`, and the auto-proposal pipeline step are all real,
+merged code. `matchEntries.ts` should import `normalise()` from `src/normalize/` and
+`parseTorrent()` from `src/extract/cascade.ts` directly — no shim needed, nothing left
+blocking this plan from starting.
 
 ---
 
