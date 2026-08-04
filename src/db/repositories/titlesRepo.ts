@@ -67,6 +67,13 @@ export async function findTitleByCleanedName(cleanedName: string): Promise<Title
   return matches[0] ?? null;
 }
 
+/** Every title in the library -- used by the feed scraper to match against
+ * (docs/rutracker-scraper-plan.md), a cheap read given the table is small. */
+export async function listAll(): Promise<Title[]> {
+  const result = await pool.query('select * from titles order by name_ru');
+  return result.rows.map((row) => toTitle(titleRowSchema.parse(row)));
+}
+
 export async function findOrCreateTitle(
   titleData: Omit<Title, 'id'>,
 ): Promise<Title> {

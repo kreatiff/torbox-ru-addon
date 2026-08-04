@@ -11,6 +11,6 @@ export const hasTestDb = Boolean(process.env.TEST_DATABASE_URL);
 
 export async function truncateAll(): Promise<void> {
   await pool.query(
-    'truncate table play_log, mappings, provider_seasons, rules, files, titles, torrents restart identity cascade',
+    'truncate table play_log, mappings, feed_entries, provider_seasons, rules, files, titles, torrents restart identity cascade',
   );
 }

@@ -10,6 +10,7 @@ import {
   getProviderSeason,
   getRuleById,
   deleteRule,
+  listFeedEntries,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest } from '../../../ingest/pipeline.js';
@@ -447,6 +448,26 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       filesNoMountPath,
       recentPlays,
     };
+  });
+
+  // GET /api/feed - RuTracker feed entries matched against the library
+  // (docs/rutracker-scraper-plan.md), newest last_updated first.
+  app.get('/feed', async (request, _reply) => {
+    const { limit, offset } = request.query as { limit?: string; offset?: string };
+    const options: Parameters<typeof listFeedEntries>[0] = {};
+    if (limit !== undefined) options.limit = Number(limit);
+    if (offset !== undefined) options.offset = Number(offset);
+    const entries = await listFeedEntries(options);
+    return entries.map((e) => ({
+      topicId: e.topicId,
+      titleId: e.titleId,
+      titleName: e.titleName,
+      rawTitle: e.rawTitle,
+      url: e.url,
+      firstSeen: e.firstSeen,
+      lastUpdated: e.lastUpdated,
+      notifiedAt: e.notifiedAt,
+    }));
   });
 
   // POST /api/ingest/run - Trigger ingest run

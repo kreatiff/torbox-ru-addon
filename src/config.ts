@@ -23,6 +23,15 @@ const envSchema = z.object({
   // defeats that gate entirely -- same reasoning as ADDON_TOKEN above.
   ADMIN_USER: z.string().min(1, 'ADMIN_USER is required'),
   ADMIN_PASS: z.string().min(1, 'ADMIN_PASS is required'),
+  // --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
+  // Comma-separated Atom feed URLs. No default: an unset value forces the
+  // consumer to fall back to the hardcoded constant inside fetchFeed.ts --
+  // same pattern as NOT_WEB_READY_EXTENSIONS above.
+  RUTRACKER_FEED_URLS: z.string().optional(),
+  // Persist feed entries with no matching title (title_id = NULL), for
+  // debugging the matcher. Off by default so feed_entries stays library-
+  // scoped and bounded.
+  RUTRACKER_STORE_UNMATCHED: z.coerce.boolean().default(false),
 });
 
 function loadConfig() {
@@ -48,6 +57,12 @@ function loadConfig() {
     tmdbApiKey: parsed.data.TMDB_API_KEY,
     adminUser: parsed.data.ADMIN_USER,
     adminPass: parsed.data.ADMIN_PASS,
+    rutrackerFeedUrls: parsed.data.RUTRACKER_FEED_URLS
+      ? parsed.data.RUTRACKER_FEED_URLS.split(',')
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0)
+      : undefined,
+    rutrackerStoreUnmatched: parsed.data.RUTRACKER_STORE_UNMATCHED,
   };
 }
 

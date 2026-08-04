@@ -1,12 +1,13 @@
 # RuTracker feed scraper implementation plan
 
-> Status: proposed, not started. Originally written against `dev` after Milestone 4 merge,
-> pending Milestone 5 Step 1 (`src/normalize/`). Milestone 5 has since shipped in full
-> (`src/normalize/`, `src/extract/`, `src/resolve/`, the auto-proposal pipeline step) — the
-> dependency below is satisfied and the shim fallback that used to be needed no longer
-> applies. Revised after review to reuse `src/extract/cascade.ts`'s `parseTorrent()` instead
-> of a bespoke title-stripping regex, fix an upsert gap, and add feed-fetch failure isolation
-> (see inline notes below).
+> Status: implemented as written, including every fix from the review pass (reuse
+> `parseTorrent()`, the upsert-on-conflict fix, word-boundary matching, feed-fetch failure
+> isolation, `bigint` topic_id, paired down migration, `GET /api/feed` pagination). Verified
+> against a real Postgres 16 instance and the real live `f/939` feed (saved as
+> `test/fixtures/rutracker-f939.xml`, 50 entries, 5 of them the "Большой куш. Бангкок" season-2
+> episodes) — `npm run typecheck && npm run lint && npm test` all green (24 files, 151 tests).
+> Not yet exercised against a real deployed instance/TorBox account; that's the one piece left
+> per the plan's own manual-verification section.
 
 ## What this is
 

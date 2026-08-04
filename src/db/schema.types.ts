@@ -104,3 +104,14 @@ export const providerSeasonRowSchema = z.object({
   fetched_at: z.date(),
 });
 export type ProviderSeasonRow = z.infer<typeof providerSeasonRowSchema>;
+
+export const feedEntryRowSchema = z.object({
+  topic_id: z.number().int(),
+  title_id: z.string().nullable(),
+  raw_title: z.string(),
+  url: z.string(),
+  first_seen: z.date(),
+  last_updated: z.date(),
+  notified_at: z.date().nullable(),
+});
+export type FeedEntryRow = z.infer<typeof feedEntryRowSchema>;
