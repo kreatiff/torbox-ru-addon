@@ -1,4 +1,4 @@
-# RuTracker feed scraper — implementation plan
+# RuTracker feed scraper implementation plan
 
 > Status: proposed, not started. Written against `dev` after Milestone 4 merge.
 > Intended to be implemented after Milestone 5 Step 1 (`src/normalize/`) ships,
