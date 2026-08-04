@@ -198,14 +198,18 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects numbering 'parsed' with 400 before creating a rule", async () => {
+  it("rejects numbering 'parsed' with 400 when the torrent name can't be resolved", async () => {
+    // 'parsed' needs a torrent name for expandParsed to re-run the cascade
+    // against (§Milestone 5). 'h-unknown' has no torrents row and the
+    // request supplies no torrentName override, so there's nothing to
+    // resolve it from.
     const app = build();
     const response = await app.inject({
       method: 'POST',
       url: '/api/rules',
       headers: { authorization: authHeader, 'content-type': 'application/json' },
       payload: {
-        torrentHash: 'h1',
+        torrentHash: 'h-unknown',
         season: 1,
         numbering: 'parsed',
         sort: 'natural',
@@ -216,6 +220,46 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     expect(response.statusCode).toBe(400);
     const rulesCount = await pool.query('select count(*) from rules');
     expect(Number(rulesCount.rows[0].count)).toBe(0);
+    await app.close();
+  });
+
+  it("accepts numbering 'parsed' and materialises mappings from the real cascade when the torrent name resolves", async () => {
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h-parsed', 2001, 'Parsed Show', now())`,
+    );
+    await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h-parsed', 1, 'Parsed.Show.s01.E01.mp4', 100, true),
+              ('h-parsed', 2, 'Parsed.Show.s01.E02.mp4', 100, true)`,
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/rules',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {
+        torrentHash: 'h-parsed',
+        season: 1,
+        numbering: 'parsed',
+        sort: 'natural',
+        startEpisode: 1,
+        title: { nameRu: 'Parsed Show' },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+
+    const mappings = await pool.query(
+      `select m.season, m.episode from mappings m
+       join rules r on r.id = m.rule_id
+       where r.torrent_hash = 'h-parsed' order by m.episode`,
+    );
+    expect(mappings.rows).toEqual([
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+    ]);
     await app.close();
   });
 

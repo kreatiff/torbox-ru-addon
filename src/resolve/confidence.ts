@@ -46,7 +46,10 @@ const MEDIUM_WEIGHT = 0.15;
 const POSITIONAL_PENALTY_MAX = 0.25;
 const POSITIONAL_GATE_THRESHOLD = 0.5;
 const HIGH_SCORE_THRESHOLD = 0.7;
-const MEDIUM_SCORE_THRESHOLD = 0.45;
+// Exported: this is also the floor GET /api/queue and rebuildAllMappings()
+// use to recognise a rule as still pending human review (source: 'auto' and
+// confidence below this) -- must stay in sync with the MEDIUM tier here.
+export const MEDIUM_SCORE_THRESHOLD = 0.45;
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -203,11 +206,11 @@ function scoreSignals(signals: ConfidenceSignals): number {
     denominator += MEDIUM_WEIGHT;
   }
 
-  // Positional penalty scales with fraction of files affected.
+  // Positional penalty scales linearly with fraction of files affected,
+  // reaching the full penalty at the gate-#3 boundary itself (not at 100%)
+  // per the signed-off formula in decisions.md.
   const penalty =
-    signals.positionalFraction >= POSITIONAL_GATE_THRESHOLD
-      ? POSITIONAL_PENALTY_MAX
-      : signals.positionalFraction * POSITIONAL_PENALTY_MAX;
+    Math.min(signals.positionalFraction / POSITIONAL_GATE_THRESHOLD, 1) * POSITIONAL_PENALTY_MAX;
   numerator -= penalty;
 
   if (denominator === 0) {

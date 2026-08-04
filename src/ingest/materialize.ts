@@ -4,7 +4,16 @@ import { replaceMappingsForRule } from '../db/repositories/mappingsRepo.js';
 import { getRuleById, listRules } from '../db/repositories/rulesRepo.js';
 import { logger } from '../logger.js';
 import { expandRule } from '../resolve/expandRule.js';
+import { MEDIUM_SCORE_THRESHOLD } from '../resolve/confidence.js';
 import type { Mapping, Rule, RuleFile } from '../resolve/types.js';
+
+/** Same predicate GET /api/queue uses to decide a rule is still awaiting
+ * human review -- an auto-proposed rule below the MEDIUM floor (whether
+ * from a plain low score or a categorical gate, both of which proposeRule
+ * persists below this floor) must stay inert until a human accepts it. */
+function isPendingReview(rule: Rule): boolean {
+  return rule.source === 'auto' && rule.confidence < MEDIUM_SCORE_THRESHOLD;
+}
 
 async function rebuildFor(rule: Rule): Promise<Mapping[]> {
   const files = await listVideoFilesForTorrent(rule.torrentHash);
@@ -35,12 +44,15 @@ export interface RebuildAllSummary {
 }
 
 /**
- * Rebuilds mappings for every existing rule. Not gated behind "propose
- * rules" -- that step doesn't exist yet (Milestone 5) -- so this just
- * processes whatever rules already exist: hand-inserted ones (Milestone 2)
- * or ones edited directly in the DB before the Labeller UI exists
- * (Milestone 4). One rule failing (most likely: numbering 'parsed', not
- * implemented yet) is logged and skipped rather than aborting the rest.
+ * Rebuilds mappings for every existing rule that isn't still pending human
+ * review: hand-inserted or Labeller-authored/edited rules (source:
+ * 'manual', confidence 1.0), and auto-proposed rules that already cleared
+ * the auto-commit floor. Rules the auto-proposal step (Milestone 5)
+ * inserted but withheld -- either a plain low score or a categorical gate,
+ * both persisted below the MEDIUM floor -- must stay inert (no mappings,
+ * visible only in the Queue) until a human accepts them via `POST
+ * /api/rules`, which sets source: 'manual' and confidence: 1.0. One rule
+ * failing is logged and skipped rather than aborting the rest.
  */
 export async function rebuildAllMappings(): Promise<RebuildAllSummary> {
   const rules = await listRules();
@@ -48,6 +60,9 @@ export async function rebuildAllMappings(): Promise<RebuildAllSummary> {
   let rulesFailed = 0;
 
   for (const rule of rules) {
+    if (isPendingReview(rule)) {
+      continue;
+    }
     try {
       await rebuildFor(rule);
       rulesProcessed++;
