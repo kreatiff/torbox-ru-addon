@@ -133,6 +133,32 @@ interface IngestRunResult {
   message: string;
 }
 
+// POST /api/torrents/:hash/preview -- an LLM extraction run on demand for
+// one torrent, NOT persisted (no rule/mappings written). The Labeller uses
+// this to populate its existing form state so the human sees the live
+// preview before deciding whether to Save.
+interface PreviewResponse {
+  tier: 'commit' | 'queue';
+  confident: boolean;
+  reasoning: string;
+  proposal: {
+    season: number;
+    numbering: 'sequential' | 'parsed' | 'continuous' | 'manual';
+    sort: 'natural' | 'path';
+    startEpisode: number;
+    absoluteOffset: number | null;
+    exceptions: Record<string, RuleException>;
+  };
+  title: {
+    id: string;
+    tmdbId: number | null;
+    nameRu: string;
+    nameEn: string | null;
+    year: number | null;
+    posterUrl: string | null;
+  } | null;
+}
+
 interface LibraryEpisode {
   episode: number;
   count: number;
@@ -690,6 +716,47 @@ function LabellerView({
   // exceptions map: record of fileId (string) to Exception value
   const [exceptions, setExceptions] = useState<Record<string, RuleException>>({});
 
+  // Last "Preview with AI" result, shown as a reasoning/confidence banner
+  // above the (already-existing) live preview table below -- cleared
+  // whenever a fresh preview is requested so a stale reasoning string never
+  // lingers next to hand-edited state.
+  const [lastPreview, setLastPreview] = useState<PreviewResponse | null>(null);
+
+  // Runs the LLM extraction for this one torrent on demand and populates
+  // the same form state a human would fill in by hand -- nothing is
+  // persisted until Save is clicked (POST /api/torrents/:hash/preview does
+  // not write a rule or mappings). The live preview table below re-renders
+  // automatically from this state change, same as any manual edit.
+  const previewWithAi = useMutation({
+    mutationFn: () =>
+      apiFetch<PreviewResponse>(`/api/torrents/${hash}/preview`, { method: 'POST' }),
+    onSuccess: (data) => {
+      setLastPreview(data);
+      setSeason(data.proposal.season);
+      setNumberingMode(data.proposal.numbering);
+      setSortMode(data.proposal.sort);
+      setStartEpisode(data.proposal.startEpisode);
+      setAbsoluteOffset(data.proposal.absoluteOffset);
+      setExceptions(data.proposal.exceptions);
+      setSelectedShow(
+        data.title
+          ? {
+              titleId: data.title.id,
+              tmdbId: data.title.tmdbId,
+              nameRu: data.title.nameRu,
+              nameEn: data.title.nameEn,
+              year: data.title.year,
+              posterUrl: data.title.posterUrl,
+            }
+          : null,
+      );
+    },
+    onError: (err) => {
+      setLastPreview(null);
+      alert(`AI preview failed: ${err.message}`);
+    },
+  });
+
   // Handle Search Trigger
   const triggerSearch = async (query: string) => {
     if (!query) return;
@@ -852,6 +919,14 @@ function LabellerView({
           <button className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => previewWithAi.mutate()}
+            disabled={previewWithAi.isPending || !hash}
+            title="Runs the LLM extraction for this torrent and fills in the fields below for review -- nothing is saved until you click Save."
+          >
+            {previewWithAi.isPending ? 'Asking the LLM… (can take up to a minute)' : 'Preview with AI'}
+          </button>
           <button className="btn btn-primary" onClick={handleSubmit} disabled={saveRule.isPending}>
             {saveRule.isPending
               ? 'Saving...'
@@ -863,6 +938,19 @@ function LabellerView({
       </div>
 
       <div className="view-body">
+        {/* AI preview result -- what the LLM proposed and why, cleared on
+            the next preview request. Purely informational; every field it
+            populated above is still freely editable before Save. */}
+        {lastPreview && (
+          <div className={`banner ${lastPreview.tier === 'commit' ? 'success' : 'attention'}`}>
+            {lastPreview.tier === 'commit' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+            <span>
+              <strong>AI preview ({lastPreview.tier === 'commit' ? 'confident' : 'needs review'}):</strong>{' '}
+              {lastPreview.reasoning}
+            </span>
+          </div>
+        )}
+
         {/* Validation Banners */}
         {xizY && (
           <div className={`banner ${fileCountWarning ? 'attention' : 'success'}`}>

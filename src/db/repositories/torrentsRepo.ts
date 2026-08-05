@@ -29,6 +29,15 @@ function toTorrent(row: TorrentRow): Torrent {
   };
 }
 
+/** Single torrent by hash, or null if unknown. Promoted out of the inline
+ * `pool.query` `GET /api/torrents/:hash` used to do ad hoc, so the new
+ * per-torrent LLM preview endpoint can share the same lookup. */
+export async function getTorrentByHash(hash: string): Promise<Torrent | null> {
+  const result = await pool.query('select * from torrents where hash = $1', [hash]);
+  const row = result.rows[0];
+  return row ? toTorrent(torrentRowSchema.parse(row)) : null;
+}
+
 /** Every hash currently in `torrents`, regardless of status. A torrent's file
  * list can't change once ingested (the hash *is* a content hash), so this is
  * how ingest decides which torrents are new enough to need a files fetch —

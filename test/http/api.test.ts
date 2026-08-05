@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import { build } from '../../src/http/server.js';
 import { config } from '../../src/config.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../src/metadata/tmdb.js';
+import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
 
@@ -9,6 +10,10 @@ vi.mock('../../src/metadata/tmdb.js', () => ({
   searchTitles: vi.fn(),
   fetchExternalIds: vi.fn(),
   fetchSeasonDetails: vi.fn(),
+}));
+
+vi.mock('../../src/llm/opencodeZen.js', () => ({
+  extractEpisodes: vi.fn(),
 }));
 
 const authHeader = 'Basic ' + Buffer.from('admin:supersecret').toString('base64');
@@ -175,6 +180,133 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
         },
       },
     ]);
+    await app.close();
+  });
+});
+
+describe.skipIf(!hasTestDb)('POST /api/torrents/:hash/preview (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns 404 for a hash that was never ingested', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/torrents/does-not-exist/preview',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('returns 400 when the torrent has no video files', async () => {
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h1', 1, 'Show', now())`,
+    );
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/torrents/h1/preview',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 400 when the LLM is unavailable (extractEpisodes resolves null)', async () => {
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h1', 1, 'Show', now())`,
+    );
+    await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h1', 1, '01.mp4', 1000, true)`,
+    );
+    vi.mocked(extractEpisodes).mockResolvedValue(null);
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/torrents/h1/preview',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 502 when the LLM call throws', async () => {
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h1', 1, 'Show', now())`,
+    );
+    await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h1', 1, '01.mp4', 1000, true)`,
+    );
+    vi.mocked(extractEpisodes).mockRejectedValue(new Error('network blip'));
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/torrents/h1/preview',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(502);
+    await app.close();
+  });
+
+  it('returns a commit-tier proposal for a confident LLM extraction, without persisting anything', async () => {
+    await pool.query(`insert into titles (name_ru) values ('Show')`);
+    const torrent = await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h1', 1, 'rutor.info_Show [S01]', now()) returning hash`,
+    );
+    const files = await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h1', 1, '01.mp4', 1000, true), ('h1', 2, '02.mp4', 1000, true)
+       returning id`,
+    );
+
+    vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, reqFiles) => ({
+      title: 'Show',
+      titleEn: null,
+      year: null,
+      season: 1,
+      files: reqFiles.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+      confident: true,
+      reasoning: 'Sequentially numbered files, no ambiguity.',
+    }));
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/torrents/${torrent.rows[0].hash}/preview`,
+      headers: { authorization: authHeader },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.tier).toBe('commit');
+    expect(body.confident).toBe(true);
+    expect(body.proposal.season).toBe(1);
+    expect(body.proposal.numbering).toBe('manual');
+    expect(body.proposal.exceptions[String(files.rows[0].id)]).toEqual({ season: 1, episode: 1 });
+    expect(body.title.nameRu).toBe('Show');
+
+    // Nothing persisted -- this is a preview, not an accept.
+    const rulesCount = await pool.query('select count(*) from rules');
+    const mappingsCount = await pool.query('select count(*) from mappings');
+    expect(Number(rulesCount.rows[0].count)).toBe(0);
+    expect(Number(mappingsCount.rows[0].count)).toBe(0);
+
     await app.close();
   });
 });

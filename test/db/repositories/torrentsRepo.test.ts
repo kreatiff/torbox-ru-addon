@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { hasTestDb, truncateAll } from '../testDb.js';
 import { pool } from '../../../src/db/pool.js';
 import {
+  getTorrentByHash,
   listKnownHashes,
   markAbsentGone,
   upsertTorrent,
@@ -117,5 +118,22 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
     await markAbsentGone(['unrelated']);
     const hashes = await listKnownHashes();
     expect(hashes.has('abc123')).toBe(true);
+  });
+
+  it('getTorrentByHash returns the torrent, or null when unknown', async () => {
+    await upsertTorrent({
+      hash: 'abc123',
+      torboxId: 1,
+      name: 'Some Show',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    const found = await getTorrentByHash('abc123');
+    expect(found?.hash).toBe('abc123');
+    expect(found?.rawNameAtIngest).toBe('Some Show');
+
+    const missing = await getTorrentByHash('does-not-exist');
+    expect(missing).toBeNull();
   });
 });

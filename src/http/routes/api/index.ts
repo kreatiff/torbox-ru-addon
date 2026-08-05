@@ -10,12 +10,16 @@ import {
   getProviderSeason,
   getRuleById,
   deleteRule,
+  getTorrentByHash,
+  listVideoFilesForTorrent,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
-import { runIngest } from '../../../ingest/pipeline.js';
+import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { naturalCompare } from '../../../extract/naturalSort.js';
 import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
+import { proposeRule } from '../../../resolve/proposeRule.js';
+import { extractEpisodes } from '../../../llm/opencodeZen.js';
 
 const saveRuleBodySchema = z.object({
   torrentHash: z.string(),
@@ -168,6 +172,74 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       status: torrent.status,
       files: sortedFiles,
       rules,
+    };
+  });
+
+  // POST /api/torrents/:hash/preview - Run the LLM extraction for one
+  // torrent on demand and return its suggested mapping WITHOUT persisting
+  // anything (no rule/mappings written) -- the Labeller populates its
+  // existing live-preview form from this response, and only POST /rules
+  // (below) actually commits it. Mirrors runIngest()'s per-torrent LLM step
+  // (src/ingest/pipeline.ts) but for exactly one torrent, on demand, with
+  // nothing auto-committed regardless of the LLM's confidence.
+  app.post('/torrents/:hash/preview', async (request, reply) => {
+    const { hash } = request.params as { hash: string };
+
+    const torrent = await getTorrentByHash(hash);
+    if (!torrent) {
+      return reply.code(404).send({ error: 'Torrent not found' });
+    }
+
+    const files = await listVideoFilesForTorrent(hash);
+    if (files.length === 0) {
+      return reply.code(400).send({ error: 'Torrent has no video files' });
+    }
+
+    let llm;
+    try {
+      llm = await extractEpisodes(
+        torrent.rawNameAtIngest,
+        files.map((f) => ({ fileId: f.id, path: f.rawPath, size: f.size })),
+      );
+    } catch (err) {
+      app.log.error({ err, hash }, 'LLM extraction failed for preview request');
+      return reply.code(502).send({ error: 'LLM extraction failed -- see server logs' });
+    }
+    if (!llm) {
+      return reply.code(400).send({ error: 'OPENCODE_ZEN_API_KEY is not configured' });
+    }
+
+    const resolution = await resolveTitleMatch(llm);
+
+    const { proposal, tier } = proposeRule(
+      { hash: torrent.hash, rawNameAtIngest: torrent.rawNameAtIngest },
+      files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size })),
+      resolution?.titleMatch ?? null,
+      llm,
+    );
+
+    return {
+      tier,
+      confident: llm.confident,
+      reasoning: llm.reasoning,
+      proposal: {
+        season: proposal.season,
+        numbering: proposal.numbering,
+        sort: proposal.sort,
+        startEpisode: proposal.startEpisode,
+        absoluteOffset: proposal.absoluteOffset,
+        exceptions: proposal.exceptions,
+      },
+      title: resolution
+        ? {
+            id: resolution.title.id,
+            tmdbId: resolution.title.tmdbId,
+            nameRu: resolution.title.nameRu,
+            nameEn: resolution.title.nameEn,
+            year: resolution.title.year,
+            posterUrl: resolution.title.posterUrl,
+          }
+        : null,
     };
   });
 

@@ -39,6 +39,11 @@ function toUpsertFileInputs(torrentHash: string, files: TorboxFile[]): UpsertFil
   }));
 }
 
+export interface TitleResolution {
+  title: Title;
+  titleMatch: TitleMatch;
+}
+
 /**
  * Resolves the LLM's title/season guess to an existing title row or a TMDB
  * result. If a known title matches (by name or alias) we reuse it;
@@ -49,13 +54,18 @@ function toUpsertFileInputs(torrentHash: string, files: TorboxFile[]): UpsertFil
  * (site-tag prefixes and leftover phrase fragments in a hand-cleaned title
  * never matched anything, even when the show and season were obvious to a
  * human). Returns null only when TMDB has no results at all for the guess.
+ *
+ * Returns the full `Title` row alongside the narrower `TitleMatch` (used by
+ * `proposeRule`'s provider-season cross-check) so callers that need to show
+ * a human the matched show -- e.g. the per-torrent preview endpoint -- have
+ * `tmdbId`/`year`/`posterUrl` without a second lookup.
  */
-async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleMatch | null> {
+export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolution | null> {
   const existing =
     (await findTitleByCleanedName(llm.title)) ??
     (llm.titleEn ? await findTitleByCleanedName(llm.titleEn) : null);
   if (existing) {
-    return toTitleMatch(existing, llm.season);
+    return { title: existing, titleMatch: await toTitleMatch(existing, llm.season) };
   }
 
   const tmdbResults = await searchTitles(llm.title);
@@ -87,7 +97,7 @@ async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleMatch | null>
     posterUrl: match.posterUrl ?? null,
   });
 
-  return toTitleMatch(created, llm.season);
+  return { title: created, titleMatch: await toTitleMatch(created, llm.season) };
 }
 
 /** When the LLM gave a year, prefer TMDB's top result whose year matches
@@ -263,12 +273,12 @@ export async function runIngest(): Promise<IngestSummary> {
         logger.warn({ err, hash: torrent.hash }, 'LLM extraction failed, queuing for manual review');
       }
 
-      const titleMatch = llm ? await resolveTitleMatch(llm) : null;
+      const resolution = llm ? await resolveTitleMatch(llm) : null;
 
       const { proposal, tier } = proposeRule(
         { hash: torrent.hash, rawNameAtIngest: torrent.rawNameAtIngest },
         files,
-        titleMatch,
+        resolution?.titleMatch ?? null,
         llm,
       );
 
