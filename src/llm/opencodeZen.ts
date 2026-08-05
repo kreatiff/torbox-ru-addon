@@ -3,7 +3,11 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 
 const OPENCODE_ZEN_URL = 'https://opencode.ai/zen/v1/chat/completions';
-const REQUEST_TIMEOUT_MS = 30_000;
+// deepseek-v4-flash-free is a reasoning model that emits hidden
+// reasoning_content before its answer -- observed ~35s for even a trivial
+// one-line reply on Zen's free tier, so a tight timeout here fires on
+// perfectly healthy responses, not just genuinely stuck requests.
+const REQUEST_TIMEOUT_MS = 90_000;
 
 const chatCompletionSchema = z.object({
   choices: z.array(
