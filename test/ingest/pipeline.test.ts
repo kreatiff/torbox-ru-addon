@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vites
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
 import { runIngest } from '../../src/ingest/pipeline.js';
+import { extractEpisodes } from '../../src/llm/opencodeZen.js';
+
+vi.mock('../../src/llm/opencodeZen.js', () => ({
+  extractEpisodes: vi.fn(),
+}));
 
 interface MockTorrent {
   id: number;
@@ -36,6 +41,10 @@ function stubTorboxApi(opts: { mylist: MockTorrent[]; byId?: Record<number, Mock
 describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
   beforeEach(async () => {
     await truncateAll();
+    // Default: no LLM extraction (as if OPENCODE_ZEN_API_KEY were unset) --
+    // unruled torrents simply queue for manual review unless a test opts in
+    // with its own mockImplementation/mockResolvedValueOnce below.
+    vi.mocked(extractEpisodes).mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -190,17 +199,26 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     ]);
   });
 
-  it('auto-proposes and auto-commits a rule for an unruled torrent when it cleanly matches an existing title', async () => {
+  it('auto-proposes and auto-commits a rule for an unruled torrent when the LLM is confident and the title cleanly matches an existing title', async () => {
     await pool.query(`insert into titles (name_ru) values ('Clean Show')`);
+    vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, files) => ({
+      title: 'Clean Show',
+      titleEn: null,
+      year: null,
+      season: 1,
+      files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+      confident: true,
+      reasoning: 'Files are sequentially numbered with no other episode markers.',
+    }));
     stubTorboxApi({
       mylist: [
         {
           id: 7,
           hash: 'hash-f',
-          name: 'Clean Show 1 сезон 2 из 2 выпуск',
+          name: 'rutor.info_Clean Show [S01] (2025) WEBRip 1080p от Files-x',
           files: [
-            { id: 70, name: 'Clean.Show.s01.E01.mp4', size: 1_000_000_000 },
-            { id: 71, name: 'Clean.Show.s01.E02.mp4', size: 1_000_000_000 },
+            { id: 70, name: '01. Clean Show.mp4', size: 1_000_000_000 },
+            { id: 71, name: '02. Clean Show.mp4', size: 1_000_000_000 },
           ],
         },
       ],
@@ -219,13 +237,20 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }]);
   });
 
-  it('does not materialise mappings for an auto-proposed rule when the X из Y categorical gate fires, even though every file has a clean SxxExx match', async () => {
-    // Regression test: proposeRule/runIngest used to decide auto-commit from
-    // a raw numeric score (>= 0.45) instead of the confidence tier, so a
-    // proposal that hit a categorical gate (declared "5 из 13" but 6 actual
-    // files -- a real red flag per spec §3.4) could still score into MEDIUM
-    // via other signals and get auto-committed anyway.
+  it('does not materialise mappings for an auto-proposed rule when the LLM reports itself not confident, even though the title matches an existing show', async () => {
+    // Regression guard: a proposal must never auto-commit on title match
+    // alone -- the LLM's own confident:false has to be enough on its own to
+    // force a queue, with no mappings materialised.
     await pool.query(`insert into titles (name_ru) values ('Show')`);
+    vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, files) => ({
+      title: 'Show',
+      titleEn: null,
+      year: null,
+      season: 2,
+      files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+      confident: false,
+      reasoning: 'Declared "5 из 13" but only 6 files are present -- unsure which episodes these are.',
+    }));
     stubTorboxApi({
       mylist: [
         {
@@ -249,7 +274,7 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     const rule = await pool.query(
       `select confidence, proposal_reason from rules where torrent_hash = 'hash-g'`,
     );
-    expect(rule.rows[0].proposal_reason).toMatch(/does not match the video file count/);
+    expect(rule.rows[0].proposal_reason).toMatch(/unsure which episodes/);
 
     const mappings = await pool.query(
       `select m.episode from mappings m
@@ -257,5 +282,48 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
        where r.torrent_hash = 'hash-g'`,
     );
     expect(mappings.rows).toEqual([]);
+  });
+
+  it('regression: resolves a title even when the torrent name has a site-tag prefix and a hard-to-regex "X из Y" phrase order', async () => {
+    // Both real torrent names that scored 0% confidence under the old
+    // regex cascade: rutor.info_-prefixed, and "range + episode-word + из"
+    // ordering that broke both parseXofY and the title-cleaning stripper.
+    // The LLM's cleaned title guess plus non-exact-match TMDB/title
+    // resolution (pickBestTmdbMatch in pipeline.ts) is what fixes this --
+    // this test locks that behaviour in.
+    await pool.query(`insert into titles (name_ru) values ('Большой Куш')`);
+    vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, files) => ({
+      title: 'Большой Куш',
+      titleEn: 'Bolshoy Kush',
+      year: 2025,
+      season: 1,
+      files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+      confident: true,
+      reasoning: 'Twelve sequentially numbered files, no other episode markers.',
+    }));
+    stubTorboxApi({
+      mylist: [
+        {
+          id: 9,
+          hash: 'hash-h',
+          name: 'Большой куш. Бангкок 1 сезон 1-12 выпуск из 12 [2025, ТВ-шоу, реалити-шоу, WEBRip]',
+          files: [1, 2, 3].map((n) => ({
+            id: 90 + n,
+            name: `Большой куш. Бангкок.2025.WEB-DLRip.Files-x/0${n}. Большой куш. Бангкок.2025.WEB-DLRip.Files-x.avi`,
+            size: 1_000_000_000,
+          })),
+        },
+      ],
+    });
+
+    const summary = await runIngest();
+    expect(summary.proposalsAutoCommitted).toBe(1);
+
+    const mappings = await pool.query(
+      `select m.episode from mappings m
+       join rules r on r.id = m.rule_id
+       where r.torrent_hash = 'hash-h' order by m.episode`,
+    );
+    expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }, { episode: 3 }]);
   });
 });

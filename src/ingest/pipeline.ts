@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 import { getMylist, getTorrentById, refreshWebdav } from '../torbox/client.js';
 import { throttledMap } from '../torbox/rateLimit.js';
 import type { TorboxFile, TorboxTorrent } from '../torbox/schemas.js';
@@ -6,13 +7,13 @@ import { listActiveUnruledTorrents, listKnownHashes, markAbsentGone, upsertTorre
 import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
 import { findOrCreateTitle, findTitleByCleanedName, type Title } from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
-import { parseTorrent } from '../extract/cascade.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
 import { isVideoFile } from './isVideoFile.js';
 import type { TitleMatch } from '../resolve/confidence.js';
-import { fetchExternalIds, fetchSeasonDetails, searchTitles } from '../metadata/tmdb.js';
+import { fetchExternalIds, fetchSeasonDetails, searchTitles, type TmdbSearchResult } from '../metadata/tmdb.js';
+import { extractEpisodes, type LlmExtraction } from '../llm/opencodeZen.js';
 
 export interface IngestSummary {
   webdavRefreshed: boolean;
@@ -38,31 +39,31 @@ function toUpsertFileInputs(torrentHash: string, files: TorboxFile[]): UpsertFil
   }));
 }
 
-/** Match a torrent's cleaned name to an existing title or a single confident
- * TMDB result. Keeps the title-match gate simple: exact/near-exact only,
- * no fuzzy NLP. If a unique existing title matches we reuse it; otherwise we
- * search TMDB and only accept if exactly one result matches the cleaned name. */
-async function resolveTitleMatch(torrentName: string): Promise<TitleMatch | null> {
-  const { cleanedTitle, season } = parseTorrent(torrentName);
-  const existing = await findTitleByCleanedName(cleanedTitle);
+/**
+ * Resolves the LLM's title/season guess to an existing title row or a TMDB
+ * result. If a known title matches (by name or alias) we reuse it;
+ * otherwise we search TMDB and take the best candidate -- deliberately
+ * *not* an exact-string match against the LLM's guess: TMDB's own search
+ * ranking already does fuzzy matching, and requiring string equality here
+ * is exactly what broke title resolution under the old regex-cascade flow
+ * (site-tag prefixes and leftover phrase fragments in a hand-cleaned title
+ * never matched anything, even when the show and season were obvious to a
+ * human). Returns null only when TMDB has no results at all for the guess.
+ */
+async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleMatch | null> {
+  const existing =
+    (await findTitleByCleanedName(llm.title)) ??
+    (llm.titleEn ? await findTitleByCleanedName(llm.titleEn) : null);
   if (existing) {
-    return toTitleMatch(existing, cleanedTitle, season ?? 1);
+    return toTitleMatch(existing, llm.season);
   }
 
-  const tmdbResults = await searchTitles(cleanedTitle);
-  const tmdbMatches = tmdbResults.filter(
-    (r) =>
-      r.nameRu.toLowerCase() === cleanedTitle.toLowerCase() ||
-      (r.nameEn && r.nameEn.toLowerCase() === cleanedTitle.toLowerCase()),
-  );
-  if (tmdbMatches.length !== 1) {
-    return null;
-  }
-
-  const [match] = tmdbMatches;
+  const tmdbResults = await searchTitles(llm.title);
+  const match = pickBestTmdbMatch(tmdbResults, llm.year);
   if (!match) {
     return null;
   }
+
   let imdbId: string | null = null;
   let tvdbId: number | null = null;
   if (match.tmdbId) {
@@ -86,14 +87,26 @@ async function resolveTitleMatch(torrentName: string): Promise<TitleMatch | null
     posterUrl: match.posterUrl ?? null,
   });
 
-  return toTitleMatch(created, cleanedTitle, season ?? 1);
+  return toTitleMatch(created, llm.season);
 }
 
-async function toTitleMatch(
-  title: Title,
-  cleanedTitle: string,
-  season: number,
-): Promise<TitleMatch> {
+/** When the LLM gave a year, prefer TMDB's top result whose year matches
+ * it; otherwise trust TMDB's own top-ranked result. Null only when TMDB
+ * returned zero results. */
+function pickBestTmdbMatch(results: TmdbSearchResult[], year: number | null): TmdbSearchResult | null {
+  if (results.length === 0) {
+    return null;
+  }
+  if (year !== null) {
+    const yearMatch = results.find((r) => r.year === year);
+    if (yearMatch) {
+      return yearMatch;
+    }
+  }
+  return results[0] ?? null;
+}
+
+async function toTitleMatch(title: Title, season: number): Promise<TitleMatch> {
   const tmdbSeasons = await fetchTmdbSeason(title.id, title.tmdbId, season);
   return {
     titleId: title.id,
@@ -222,48 +235,67 @@ export async function runIngest(): Promise<IngestSummary> {
     );
   }
 
-  // Milestone 5: propose rules for active torrents that still have no rule.
+  // Milestone 5 (now LLM-based, see docs/decisions.md): propose rules for
+  // active torrents that still have no rule. Throttled at
+  // OPENCODE_ZEN_REQUEST_DELAY_MS, same pattern as the TorBox per-file
+  // fetch above -- free-tier LLM rate limits are a real near-term risk.
   const unruled = await listActiveUnruledTorrents();
   let proposalsCreated = 0;
   let proposalsAutoCommitted = 0;
   let proposalsQueued = 0;
-  for (const torrent of unruled) {
-    const titleMatch = await resolveTitleMatch(torrent.rawNameAtIngest);
-    const files = await listVideoFilesForTorrent(torrent.hash);
-    if (files.length === 0) {
-      logger.info({ hash: torrent.hash }, 'skipping proposal: no video files');
-      continue;
-    }
 
-    const { proposal, tier } = proposeRule(
-      { hash: torrent.hash, rawNameAtIngest: torrent.rawNameAtIngest },
-      files,
-      titleMatch,
-    );
+  await throttledMap(
+    unruled,
+    async (torrent) => {
+      const files = await listVideoFilesForTorrent(torrent.hash);
+      if (files.length === 0) {
+        logger.info({ hash: torrent.hash }, 'skipping proposal: no video files');
+        return;
+      }
 
-    try {
-      const saved = await upsertRule(proposal);
-      proposalsCreated++;
+      let llm: LlmExtraction | null = null;
+      try {
+        llm = await extractEpisodes(
+          torrent.rawNameAtIngest,
+          files.map((f) => ({ fileId: f.id, path: f.rawPath, size: f.size })),
+        );
+      } catch (err) {
+        logger.warn({ err, hash: torrent.hash }, 'LLM extraction failed, queuing for manual review');
+      }
 
-      // Materialise mappings for high/medium tiers only -- any categorical
-      // gate (title/xOfY/positional) forces 'queue' regardless of the raw
-      // score, and the rule must stay inert (visible in the Queue, no
-      // streams) until a human accepts it. See docs/decisions.md.
-      if (tier === 'high' || tier === 'medium') {
-        try {
-          await rebuildMappingsForRule(saved.id);
-          proposalsAutoCommitted++;
-        } catch (err) {
-          logger.warn({ err, hash: torrent.hash }, 'auto-proposed rule accepted but rebuild failed');
+      const titleMatch = llm ? await resolveTitleMatch(llm) : null;
+
+      const { proposal, tier } = proposeRule(
+        { hash: torrent.hash, rawNameAtIngest: torrent.rawNameAtIngest },
+        files,
+        titleMatch,
+        llm,
+      );
+
+      try {
+        const saved = await upsertRule(proposal);
+        proposalsCreated++;
+
+        // Materialise mappings for a committed proposal only -- a queued
+        // one must stay inert (visible in the Queue, no streams) until a
+        // human accepts it. See docs/decisions.md.
+        if (tier === 'commit') {
+          try {
+            await rebuildMappingsForRule(saved.id);
+            proposalsAutoCommitted++;
+          } catch (err) {
+            logger.warn({ err, hash: torrent.hash }, 'auto-proposed rule accepted but rebuild failed');
+            proposalsQueued++;
+          }
+        } else {
           proposalsQueued++;
         }
-      } else {
-        proposalsQueued++;
+      } catch (err) {
+        logger.warn({ err, hash: torrent.hash }, 'failed to persist auto-proposed rule');
       }
-    } catch (err) {
-      logger.warn({ err, hash: torrent.hash }, 'failed to persist auto-proposed rule');
-    }
-  }
+    },
+    config.opencodeZenRequestDelayMs,
+  );
   if (proposalsCreated > 0) {
     logger.info({ proposalsCreated, proposalsAutoCommitted, proposalsQueued }, 'auto-proposals processed');
   }

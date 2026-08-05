@@ -17,6 +17,13 @@ const envSchema = z.object({
   NOT_WEB_READY_EXTENSIONS: z.string().default('ts'),
   // --- Milestone 4 (src/ui, admin UI & metadata) ---
   TMDB_API_KEY: z.string().optional(),
+  // --- LLM-based auto-proposal (replaces the regex extractor cascade for
+  // ingest-time auto-proposals; the cascade itself stays available as a
+  // manual Labeller option). Optional: without a key, unruled torrents are
+  // simply left for manual review, same as a failed title match today.
+  OPENCODE_ZEN_API_KEY: z.string().optional(),
+  OPENCODE_ZEN_MODEL: z.string().default('deepseek-v4-flash-free'),
+  OPENCODE_ZEN_REQUEST_DELAY_MS: z.coerce.number().int().nonnegative().default(1000),
   // No default: this gates the entire admin surface (rule creation, ingest
   // trigger, library/health data) behind HTTP Basic Auth, reachable from the
   // same public Cloudflare Tunnel as the addon. A guessable default here
@@ -48,6 +55,9 @@ function loadConfig() {
     tmdbApiKey: parsed.data.TMDB_API_KEY,
     adminUser: parsed.data.ADMIN_USER,
     adminPass: parsed.data.ADMIN_PASS,
+    opencodeZenApiKey: parsed.data.OPENCODE_ZEN_API_KEY,
+    opencodeZenModel: parsed.data.OPENCODE_ZEN_MODEL,
+    opencodeZenRequestDelayMs: parsed.data.OPENCODE_ZEN_REQUEST_DELAY_MS,
   };
 }
 
