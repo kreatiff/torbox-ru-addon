@@ -12,7 +12,7 @@ import type { MaskConfig } from './qualityCodecTokens.js';
 // Season marker is extracted from the original torrent name because the
 // Cyrillic word "сезон" folds to mixed-script "ceзoн" under normalisation,
 // making the original string a more reliable extraction target.
-const seasonRegex = /(\d{1,2})\s*(?:сезон|season)/i;
+const seasonRegex = /(\d{1,2})\s*(?:сезон|season)|[sS](\d{1,2})(?:[\s._-]*[eE]\d{1,3})?/i;
 
 /**
  * Extract season, X из Y, air date, and a cleaned title from the torrent name.
@@ -23,7 +23,11 @@ export function parseTorrent(torrentName: string): TorrentParseResult {
 
   const seasonMatch = torrentName.match(seasonRegex);
   const season =
-    (seasonMatch && seasonMatch[1] ? parseInt(seasonMatch[1], 10) : null) ??
+    (seasonMatch && seasonMatch[1]
+      ? parseInt(seasonMatch[1], 10)
+      : seasonMatch && seasonMatch[2]
+        ? parseInt(seasonMatch[2], 10)
+        : null) ??
     masked.seasonEpisode?.season ??
     null;
 
@@ -39,6 +43,8 @@ export function parseTorrent(torrentName: string): TorrentParseResult {
   let cleanedTitle = torrentName
     .replace(/\[.*?\]/g, ' ')
     .replace(/\(.*?\)/g, ' ')
+    // S01 / S01E01 season markers (including bracketed [S01]).
+    .replace(/[sS]\d{1,2}(?:[\s._-]*[eE]\d{1,3})?/g, ' ')
     .replace(/\d{1,2}\s*(?:сезон|season)/gi, ' ')
     .replace(
       new RegExp(
@@ -47,6 +53,13 @@ export function parseTorrent(torrentName: string): TorrentParseResult {
       ),
       ' ',
     )
+    // Tracker prefixes like "rutor.info_" or "tracker.org - ".
+    .replace(/^[\w.-]+[_-]\s*/, '')
+    // Filler words "от" / "by" that precede a release group (e.g. "от Files-x").
+    // Stripped before normalisation because mixed-script folding makes the
+    // trailing "oт" form hard to match reliably.
+    .replace(/(?:^|\s)от(?:\s|$)/i, ' ')
+    .replace(/(?:^|\s)by(?:\s|$)/i, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -58,6 +71,8 @@ export function parseTorrent(torrentName: string): TorrentParseResult {
     .replace(/__YEAR__/g, ' ')
     .replace(/__AIR_DATE__/g, ' ')
     .replace(/__SEASON_EPISODE__/g, ' ')
+    // Strip trailing/pre-trailing fillers like "от Files-x" or "by Nicodem".
+    .replace(/\s+(?:от|by)\s*$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -114,11 +129,12 @@ export function parseEpisodeSource(
     };
   }
 
-  // Stage 4: leading bare number — signal already captured.
+  // Stage 4: leading bare number is the episode itself; the same value is
+  // kept as absoluteHint for cross-check against SxxExx in other files.
   if (absoluteHint !== null) {
     return {
       season: null,
-      episode: null,
+      episode: absoluteHint,
       absoluteHint,
       airDate: null,
       stage: 'leadingNumber',
@@ -180,8 +196,13 @@ export function cascade(
   const isSingleFile = videoFiles.length === 1;
 
   const parsedFiles: CascadeFileResult[] = videoFiles.map((file) => {
-    const source = isSingleFile ? torrentNameNormalised : normalise(file.path);
-    const parsed = parseEpisodeSource(source, torrentParse, config);
+    // For multi-file torrents the episode marker is almost always on the file
+    // name, not the directory prefix. Use the basename so "show/S01/01.mkv"
+    // still parses correctly while the full path is preserved for sorting.
+    const fileName = isSingleFile
+      ? torrentNameNormalised
+      : normalise(file.path.replace(/.*[/\\]/, ''));
+    const parsed = parseEpisodeSource(fileName, torrentParse, config);
 
     return {
       fileId: file.id,

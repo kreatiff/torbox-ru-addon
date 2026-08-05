@@ -108,4 +108,21 @@ describe('cascade', () => {
       normalise('сокровища императора'),
     );
   });
+
+  it('parses [S01] season and leading-number episodes in subdirectories', () => {
+    const result = cascade(
+      'rutor.info_Большой куш. Бангкок [S01] (2025) WEBRip 1080p от Files-x',
+      [
+        file(1, 'Большой куш. Бангкок.2025.WEB-DL 1080p.Files-x/01. Большой куш. Бангкок.2025.WEB-DL 1080p.Files-x.mkv'),
+        file(2, 'Большой куш. Бангкок.2025.WEB-DL 1080p.Files-x/02. Большой куш. Бангкок.2025.WEB-DL 1080p.Files-x.mkv'),
+      ],
+    );
+
+    expect(result.season).toBe(1);
+    expect(normalise(result.cleanedTitle)).toBe(normalise('большой куш. бангкок'));
+    expect(result.files.map((f) => ({ episode: f.episode, stage: f.stage }))).toEqual([
+      { episode: 1, stage: 'leadingNumber' },
+      { episode: 2, stage: 'leadingNumber' },
+    ]);
+  });
 });

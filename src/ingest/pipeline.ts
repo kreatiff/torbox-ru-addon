@@ -7,6 +7,7 @@ import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../
 import { findOrCreateTitle, findTitleByCleanedName, type Title } from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
 import { parseTorrent } from '../extract/cascade.js';
+import { normalise } from '../normalize/normalise.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
@@ -50,11 +51,15 @@ async function resolveTitleMatch(torrentName: string): Promise<TitleMatch | null
   }
 
   const tmdbResults = await searchTitles(cleanedTitle);
-  const tmdbMatches = tmdbResults.filter(
-    (r) =>
-      r.nameRu.toLowerCase() === cleanedTitle.toLowerCase() ||
-      (r.nameEn && r.nameEn.toLowerCase() === cleanedTitle.toLowerCase()),
-  );
+  const target = normalise(cleanedTitle).toLowerCase();
+  const tmdbMatches = tmdbResults.filter((r) => {
+    const ru = normalise(r.nameRu).toLowerCase();
+    if (ru === target) return true;
+    if (r.nameEn) {
+      return normalise(r.nameEn).toLowerCase() === target;
+    }
+    return false;
+  });
   if (tmdbMatches.length !== 1) {
     return null;
   }
