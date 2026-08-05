@@ -21,6 +21,12 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Safety net for the QEMU-emulation crash class documented in the
+    # Dockerfile/docs/decisions.md: a crashed-but-not-exited qemu process can
+    # hang the build step indefinitely with no error surfaced, as opposed to
+    # failing fast. 15m is generous headroom over this workflow's normal
+    # multi-minute run time.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
