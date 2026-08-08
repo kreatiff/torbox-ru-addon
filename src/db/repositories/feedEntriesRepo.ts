@@ -103,6 +103,32 @@ export async function getFeedEntryByTopicId(topicId: number): Promise<FeedEntryR
   return row ? toFeedEntryRecord(feedEntryRowSchema.parse(row)) : null;
 }
 
+/**
+ * Manual match override from the Feed tab's autocomplete picker (for
+ * entries the automatic matcher left unmatched). Doesn't touch
+ * `notified_at` -- an unmatched entry is already marked notified shortly
+ * after it's first stored (see pipeline.ts's pollFeed), so a manual match
+ * made afterward intentionally does not retroactively fire a Discord
+ * notification. Returns null if the topic doesn't exist or the title_id
+ * doesn't reference a real title (FK violation) rather than throwing, so
+ * the route can turn either into a clean 404/400.
+ */
+export async function setTitleId(topicId: number, titleId: string): Promise<FeedEntryRecord | null> {
+  try {
+    const result = await pool.query(
+      'update feed_entries set title_id = $1 where topic_id = $2 returning *',
+      [titleId, topicId],
+    );
+    const row = result.rows[0];
+    return row ? toFeedEntryRecord(feedEntryRowSchema.parse(row)) : null;
+  } catch (err) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === '23503') {
+      return null;
+    }
+    throw err;
+  }
+}
+
 /** Idempotency marker for the manual "Download" action -- see the
  * feed-entries-downloaded-at migration for why. */
 export async function markDownloaded(topicId: number): Promise<void> {

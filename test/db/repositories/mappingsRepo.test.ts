@@ -4,6 +4,7 @@ import { pool } from '../../../src/db/pool.js';
 import {
   listMappingsForRule,
   replaceMappingsForRule,
+  listMappedEpisodeKeys,
 } from '../../../src/db/repositories/mappingsRepo.js';
 import type { Mapping } from '../../../src/resolve/types.js';
 
@@ -60,5 +61,24 @@ describe.skipIf(!hasTestDb)('mappingsRepo', () => {
     ]);
     await replaceMappingsForRule(ruleId, []);
     expect(await listMappingsForRule(ruleId)).toEqual([]);
+  });
+
+  it('listMappedEpisodeKeys returns a key per distinct (title, season, episode), scoped to the given title ids', async () => {
+    const { titleId, ruleId, fileIds } = await seed();
+    const [file1, file2] = fileIds as [number, number];
+    await replaceMappingsForRule(ruleId, [
+      { fileId: file1, titleId, season: 2, episode: 5, ruleId },
+      { fileId: file2, titleId, season: 2, episode: 6, ruleId },
+    ]);
+
+    const keys = await listMappedEpisodeKeys([titleId]);
+    expect(keys).toEqual(new Set([`${titleId}:2:5`, `${titleId}:2:6`]));
+
+    const otherTitleId = '00000000-0000-0000-0000-000000000000';
+    expect(await listMappedEpisodeKeys([otherTitleId])).toEqual(new Set());
+  });
+
+  it('listMappedEpisodeKeys returns an empty set for an empty input without querying', async () => {
+    expect(await listMappedEpisodeKeys([])).toEqual(new Set());
   });
 });

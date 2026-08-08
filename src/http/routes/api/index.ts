@@ -13,11 +13,14 @@ import {
   getTorrentByHash,
   listVideoFilesForTorrent,
   listFeedEntries,
+  setTitleId,
+  listMappedEpisodeKeys,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
+import { parseFeedEntrySeasonEpisode } from '../../../rutracker/index.js';
 import { naturalCompare } from '../../../extract/naturalSort.js';
 import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
 import { proposeRule } from '../../../resolve/proposeRule.js';
@@ -545,24 +548,67 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/feed - RuTracker feed entries matched against the library
-  // (docs/rutracker-scraper-plan.md), newest last_updated first.
+  // (docs/rutracker-scraper-plan.md), newest last_updated first. season/
+  // episode are recomputed from raw_title on every read (cheap, pure
+  // string parsing -- see parseFeedEntrySeasonEpisode) rather than stored,
+  // same "derive, don't persist" choice as the matching step itself.
+  // alreadyInLibrary flags an entry whose (title, season, episode) is
+  // already mapped, so a human doesn't waste a download on an episode they
+  // already have.
   app.get('/feed', async (request, _reply) => {
     const { limit, offset } = request.query as { limit?: string; offset?: string };
     const options: Parameters<typeof listFeedEntries>[0] = {};
     if (limit !== undefined) options.limit = Number(limit);
     if (offset !== undefined) options.offset = Number(offset);
     const entries = await listFeedEntries(options);
-    return entries.map((e) => ({
-      topicId: e.topicId,
-      titleId: e.titleId,
-      titleName: e.titleName,
-      rawTitle: e.rawTitle,
-      url: e.url,
-      firstSeen: e.firstSeen,
-      lastUpdated: e.lastUpdated,
-      notifiedAt: e.notifiedAt,
-      downloadedAt: e.downloadedAt,
-    }));
+
+    const matchedTitleIds = [...new Set(entries.map((e) => e.titleId).filter((id): id is string => id !== null))];
+    const mappedKeys = await listMappedEpisodeKeys(matchedTitleIds);
+
+    return entries.map((e) => {
+      const { season, episode } = parseFeedEntrySeasonEpisode(e.rawTitle);
+      const alreadyInLibrary =
+        e.titleId !== null &&
+        season !== null &&
+        episode !== null &&
+        mappedKeys.has(`${e.titleId}:${season}:${episode}`);
+      return {
+        topicId: e.topicId,
+        titleId: e.titleId,
+        titleName: e.titleName,
+        rawTitle: e.rawTitle,
+        url: e.url,
+        firstSeen: e.firstSeen,
+        lastUpdated: e.lastUpdated,
+        notifiedAt: e.notifiedAt,
+        downloadedAt: e.downloadedAt,
+        season,
+        episode,
+        alreadyInLibrary,
+      };
+    });
+  });
+
+  // POST /api/feed/:topicId/match - manual match override from the Feed
+  // tab's autocomplete picker, for entries the automatic matcher left
+  // unmatched. 200 {success:false} for a bad/missing topicId or titleId
+  // (same "expected outcome, not a server error" reasoning as the download
+  // route below), 400 only for a malformed topicId.
+  app.post('/feed/:topicId/match', async (request, reply) => {
+    const { topicId } = request.params as { topicId: string };
+    const id = Number(topicId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ success: false, error: 'topicId must be an integer' });
+    }
+    const body = z.object({ titleId: z.string() }).safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ success: false, error: 'titleId is required' });
+    }
+    const updated = await setTitleId(id, body.data.titleId);
+    if (!updated) {
+      return { success: false, error: 'No such feed entry or title' };
+    }
+    return { success: true };
   });
 
   // POST /api/feed/:topicId/download - manual Download action from the

@@ -67,3 +67,21 @@ export async function findMappingsForEpisode(
   );
   return result.rows.map((row) => toMapping(mappingRowSchema.parse(row)));
 }
+
+/**
+ * Every (title, season, episode) combination already mapped, for the given
+ * titles -- backs the Feed tab's "already in library" check. One query for
+ * an entire page of feed entries rather than one per row: the caller
+ * intersects this set against each entry's own (titleId, season, episode)
+ * key (`${titleId}:${season}:${episode}`) computed from its raw title.
+ */
+export async function listMappedEpisodeKeys(titleIds: string[]): Promise<Set<string>> {
+  if (titleIds.length === 0) {
+    return new Set();
+  }
+  const result = await pool.query(
+    'select distinct title_id, season, episode from mappings where title_id = any($1)',
+    [titleIds],
+  );
+  return new Set(result.rows.map((row) => `${row.title_id}:${row.season}:${row.episode}`));
+}

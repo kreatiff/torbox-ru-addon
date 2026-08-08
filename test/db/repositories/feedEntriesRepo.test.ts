@@ -7,6 +7,7 @@ import {
   listUnnotifiedEntries,
   markNotified,
   listFeedEntries,
+  setTitleId,
 } from '../../../src/db/repositories/feedEntriesRepo.js';
 
 async function insertTitle(nameRu: string): Promise<string> {
@@ -164,5 +165,39 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
     const paged = await listFeedEntries({ limit: 1, offset: 1 });
     expect(paged).toHaveLength(1);
     expect(paged[0]?.topicId).toBe(101);
+  });
+
+  it('setTitleId assigns a manual match to a previously-unmatched entry', async () => {
+    await upsertFeedEntry({
+      topicId: 200,
+      titleId: null,
+      rawTitle: 'Погоня 2 сезон: 3 выпуск',
+      url: 'https://rutracker.org/forum/viewtopic.php?t=200',
+      lastUpdated: new Date(),
+    });
+    const titleId = await insertTitle('Погоня');
+
+    const updated = await setTitleId(200, titleId);
+    expect(updated?.titleId).toBe(titleId);
+
+    const reread = await listFeedEntries();
+    expect(reread.find((e) => e.topicId === 200)?.titleId).toBe(titleId);
+  });
+
+  it('setTitleId returns null for a topic id that does not exist', async () => {
+    const titleId = await insertTitle('Show');
+    expect(await setTitleId(999_999, titleId)).toBeNull();
+  });
+
+  it('setTitleId returns null (not a thrown FK error) for a title id that does not exist', async () => {
+    await upsertFeedEntry({
+      topicId: 201,
+      titleId: null,
+      rawTitle: 'Show',
+      url: 'https://rutracker.org/forum/viewtopic.php?t=201',
+      lastUpdated: new Date(),
+    });
+    const result = await setTitleId(201, '00000000-0000-0000-0000-000000000000');
+    expect(result).toBeNull();
   });
 });

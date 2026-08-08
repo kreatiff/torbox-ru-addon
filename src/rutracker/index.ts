@@ -2,3 +2,7 @@ export { feedEntrySchema, extractTopicId, parseFeedEntry, type FeedEntry } from 
 export { fetchFeed } from './fetchFeed.js';
 export { matchEntries, type MatchedEntry } from './matchEntries.js';
 export { fetchMagnetLink, type FetchMagnetResult } from './fetchMagnet.js';
+export {
+  parseFeedEntrySeasonEpisode,
+  type FeedEntrySeasonEpisode,
+} from './parseFeedEntryEpisode.js';

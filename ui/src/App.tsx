@@ -229,12 +229,20 @@ interface FeedItem {
   lastUpdated: string;
   notifiedAt: string | null;
   downloadedAt: string | null;
+  season: number | null;
+  episode: number | null;
+  alreadyInLibrary: boolean;
 }
 
 interface DownloadFeedEntryResponse {
   success: boolean;
   alreadyDownloaded?: boolean;
   rawTitle?: string;
+  error?: string;
+}
+
+interface MatchFeedEntryResponse {
+  success: boolean;
   error?: string;
 }
 
@@ -409,6 +417,24 @@ function AdminApp() {
     },
     onError: (err) => {
       alert(`Download failed: ${err.message}`);
+    },
+  });
+
+  const matchFeedEntry = useMutation({
+    mutationFn: ({ topicId, titleId }: { topicId: number; titleId: string }) =>
+      apiFetch<MatchFeedEntryResponse>(`/api/feed/${topicId}/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titleId }),
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+      if (!result.success) {
+        alert(`Match failed: ${result.error ?? 'unknown error'}`);
+      }
+    },
+    onError: (err) => {
+      alert(`Match failed: ${err.message}`);
     },
   });
 
@@ -627,7 +653,13 @@ function AdminApp() {
         )}
 
         {activeTab === 'feed' && (
-          <FeedView feed={feed} isLoading={isFeedLoading} downloadFeedEntry={downloadFeedEntry} />
+          <FeedView
+            feed={feed}
+            isLoading={isFeedLoading}
+            downloadFeedEntry={downloadFeedEntry}
+            matchFeedEntry={matchFeedEntry}
+            library={library}
+          />
         )}
       </div>
     </div>
@@ -1795,8 +1827,14 @@ interface FeedViewProps {
   feed: FeedItem[];
   isLoading: boolean;
   downloadFeedEntry: UseMutationResult<DownloadFeedEntryResponse, Error, number>;
+  matchFeedEntry: UseMutationResult<
+    MatchFeedEntryResponse,
+    Error,
+    { topicId: number; titleId: string }
+  >;
+  library: LibraryItem[];
 }
-function FeedView({ feed, isLoading, downloadFeedEntry }: FeedViewProps) {
+function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library }: FeedViewProps) {
   const [downloadingTopicId, setDownloadingTopicId] = useState<number | null>(null);
 
   if (isLoading) return <div className="view-body">Loading RuTracker feed...</div>;
@@ -1830,7 +1868,29 @@ function FeedView({ feed, isLoading, downloadFeedEntry }: FeedViewProps) {
               <tbody>
                 {feed.map((item) => (
                   <tr key={item.topicId}>
-                    <td style={{ fontWeight: 'bold' }}>{item.titleName ?? '(unmatched)'}</td>
+                    <td style={{ minWidth: '220px' }}>
+                      {item.titleName ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 'bold' }}>{item.titleName}</span>
+                          {item.season !== null && item.episode !== null && (
+                            <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              S{String(item.season).padStart(2, '0')}E{String(item.episode).padStart(2, '0')}
+                            </span>
+                          )}
+                          {item.alreadyInLibrary && (
+                            <span className="badge success" title="This episode is already mapped in your Library">
+                              <CheckCircle size={12} /> In Library
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <FeedMatchPicker
+                          library={library}
+                          onSelect={(titleId) => matchFeedEntry.mutate({ topicId: item.topicId, titleId })}
+                          disabled={matchFeedEntry.isPending}
+                        />
+                      )}
+                    </td>
                     <td className="mono" style={{ fontSize: '12px' }}>
                       <a href={item.url} target="_blank" rel="noreferrer">
                         {item.rawTitle} <ExternalLink size={11} style={{ verticalAlign: 'middle' }} />
@@ -1868,6 +1928,75 @@ function FeedView({ feed, isLoading, downloadFeedEntry }: FeedViewProps) {
         )}
       </div>
     </>
+  );
+}
+
+// --- FEED MATCH PICKER (autocomplete over already-fetched Library titles) ---
+interface FeedMatchPickerProps {
+  library: LibraryItem[];
+  onSelect: (titleId: string) => void;
+  disabled: boolean;
+}
+function FeedMatchPicker({ library, onSelect, disabled }: FeedMatchPickerProps) {
+  const [query, setQuery] = useState('');
+
+  const normalisedQuery = query.trim().toLowerCase();
+  const matches =
+    normalisedQuery.length === 0
+      ? []
+      : library
+          .filter(
+            (title) =>
+              title.nameRu.toLowerCase().includes(normalisedQuery) ||
+              title.nameEn?.toLowerCase().includes(normalisedQuery),
+          )
+          .slice(0, 8);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        type="text"
+        placeholder="(unmatched) -- search your Library..."
+        value={query}
+        disabled={disabled}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+      />
+      {matches.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            backgroundColor: 'var(--bg-surface-elevated)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            maxHeight: '180px',
+            overflowY: 'auto',
+            zIndex: 10,
+            marginTop: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          }}
+        >
+          {matches.map((title) => (
+            <div
+              key={title.id}
+              className="hover-highlight"
+              style={{ padding: '6px 10px', fontSize: '12px', cursor: 'pointer' }}
+              onClick={() => {
+                onSelect(title.id);
+                setQuery('');
+              }}
+            >
+              {title.nameRu}
+              {title.nameEn ? ` / ${title.nameEn}` : ''}
+              {title.year ? ` (${title.year})` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

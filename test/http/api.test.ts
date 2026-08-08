@@ -884,6 +884,162 @@ describe.skipIf(!hasTestDb)('GET/POST /api/feed/:topicId/download (real Postgres
   });
 });
 
+describe.skipIf(!hasTestDb)('GET /api/feed season/episode/alreadyInLibrary (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('derives season/episode from raw_title and flags an entry whose episode is already mapped', async () => {
+    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const titleId = title.rows[0].id as string;
+
+    // Already in the library: a torrent mapped to S02E05 for this title.
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen) values ('h1', 1, 'x', now())`,
+    );
+    const file = await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h1', 1, '05.mp4', 1, true) returning id`,
+    );
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('h1', $1, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [titleId],
+    );
+    await pool.query(`insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 2, 5, $3)`, [
+      file.rows[0].id,
+      titleId,
+      rule.rows[0].id,
+    ]);
+
+    // Two feed entries: one for the already-mapped S02E05, one for a new S02E06.
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
+       (1, $1, 'Большой куш. Бангкок 2 сезон: 5 выпуск [2026]', 'https://rutracker.org/forum/viewtopic.php?t=1', now()),
+       (2, $1, 'Большой куш. Бангкок 2 сезон: 6 выпуск [2026]', 'https://rutracker.org/forum/viewtopic.php?t=2', now())`,
+      [titleId],
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      topicId: number;
+      season: number | null;
+      episode: number | null;
+      alreadyInLibrary: boolean;
+    }[];
+    const entry1 = body.find((e) => e.topicId === 1);
+    const entry2 = body.find((e) => e.topicId === 2);
+    expect(entry1).toMatchObject({ season: 2, episode: 5, alreadyInLibrary: true });
+    expect(entry2).toMatchObject({ season: 2, episode: 6, alreadyInLibrary: false });
+    await app.close();
+  });
+
+  it('never flags an unmatched entry (no title_id) as already in library', async () => {
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
+       (3, null, 'Погоня 2 сезон: 3 выпуск [2026]', 'https://rutracker.org/forum/viewtopic.php?t=3', now())`,
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed',
+      headers: { authorization: authHeader },
+    });
+    const body = response.json() as { topicId: number; alreadyInLibrary: boolean }[];
+    expect(body.find((e) => e.topicId === 3)).toMatchObject({ alreadyInLibrary: false });
+    await app.close();
+  });
+});
+
+describe.skipIf(!hasTestDb)('POST /api/feed/:topicId/match (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('assigns a manual match and the entry shows up matched on the next read', async () => {
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
+       (10, null, 'Погоня 2 сезон: 3 выпуск', 'https://rutracker.org/forum/viewtopic.php?t=10', now())`,
+    );
+    const title = await pool.query(`insert into titles (name_ru) values ('Погоня') returning id`);
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/10/match',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { titleId: title.rows[0].id },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ success: true });
+
+    const row = await pool.query('select title_id from feed_entries where topic_id = 10');
+    expect(row.rows[0].title_id).toBe(title.rows[0].id);
+    await app.close();
+  });
+
+  it('returns 200 {success:false} (not a 5xx) for a title id that does not exist', async () => {
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
+       (11, null, 'Show', 'https://rutracker.org/forum/viewtopic.php?t=11', now())`,
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/11/match',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { titleId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ success: false, error: 'No such feed entry or title' });
+    await app.close();
+  });
+
+  it('rejects a non-numeric topicId with 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/not-a-number/match',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { titleId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a missing titleId with 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/12/match',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
 afterAll(async () => {
   if (hasTestDb) await pool.end();
 });
