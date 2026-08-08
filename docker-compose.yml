@@ -40,9 +40,10 @@ services:
       context: .
       dockerfile: Dockerfile
     platform: linux/arm64
-    # Milestone 3 shape: long-running addon server (manifest/stream/play).
-    # The ingest scheduler is Milestone 6 scope; until then, trigger ingest
-    # manually: `docker compose exec app node dist/ingest/runOnce.js` (not
+    # Long-running addon server (manifest/stream/play) that also runs its
+    # own ingest scheduler (INGEST_INTERVAL_MINUTES below). Manual triggers
+    # still work alongside it: the admin UI's "Trigger Ingest Run Now"
+    # button, or `docker compose exec app node dist/ingest/runOnce.js` (not
     # `npm run ingest` -- that invokes tsx against TypeScript source, and this
     # image only ships compiled dist/ output plus production dependencies).
     restart: unless-stopped
@@ -71,11 +72,17 @@ services:
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASS: ${ADMIN_PASS}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # --- LLM-based auto-proposal ---
+      OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
+      OPENCODE_ZEN_MODEL: ${OPENCODE_ZEN_MODEL:-deepseek-v4-flash-free}
+      OPENCODE_ZEN_REQUEST_DELAY_MS: ${OPENCODE_ZEN_REQUEST_DELAY_MS:-1000}
       # --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
       RUTRACKER_FEED_URLS: ${RUTRACKER_FEED_URLS:-}
       RUTRACKER_STORE_UNMATCHED: ${RUTRACKER_STORE_UNMATCHED:-false}
       FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      # --- Ingest scheduler ---
+      INGEST_INTERVAL_MINUTES: ${INGEST_INTERVAL_MINUTES:-15}
     depends_on:
       postgres:
         condition: service_healthy

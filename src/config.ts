@@ -49,6 +49,14 @@ const envSchema = z.object({
   // Discord incoming webhook URL. No default: notifications are entirely
   // opt-in.
   DISCORD_WEBHOOK_URL: z.url().optional(),
+  // Minutes between automatic ingest runs (TorBox mylist refresh + RuTracker
+  // feed poll + auto-proposals -- all one run, see runIngest). 0 disables
+  // the scheduler entirely, leaving the existing manual triggers (the admin
+  // UI button, `docker compose exec app node dist/ingest/runOnce.js`, or an
+  // external cron hitting POST /api/ingest/run) as the only way to ingest.
+  // Defaults on (15 min) since a scheduler is the whole point of this
+  // setting -- an operator who wants manual-only sets this to 0 explicitly.
+  INGEST_INTERVAL_MINUTES: z.coerce.number().int().nonnegative().default(15),
 });
 
 function loadConfig() {
@@ -85,6 +93,7 @@ function loadConfig() {
     rutrackerStoreUnmatched: parsed.data.RUTRACKER_STORE_UNMATCHED,
     flaresolverrUrl: parsed.data.FLARESOLVERR_URL,
     discordWebhookUrl: parsed.data.DISCORD_WEBHOOK_URL,
+    ingestIntervalMinutes: parsed.data.INGEST_INTERVAL_MINUTES,
   };
 }
 
