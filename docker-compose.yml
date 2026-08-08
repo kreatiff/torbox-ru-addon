@@ -20,6 +20,21 @@ services:
     # compose-internal network. Nothing here should be reachable from the
     # Cloudflare Tunnel — that only points at `app` (from Milestone 3 on).
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    platform: linux/arm64
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${FLARESOLVERR_LOG_LEVEL:-info}
+    # Not exposed on purpose, same reasoning as `postgres` above -- only
+    # `app` needs to reach it (docs/rutracker-scraper-plan.md's manual
+    # Download action), over the compose-internal network, as
+    # http://flaresolverr:8191. It drives a real headless browser capable
+    # of fetching arbitrary URLs; no reason to put that on the host network
+    # or behind the Cloudflare Tunnel. No `depends_on` from `app`: this is
+    # an optional integration (fetchMagnetLink degrades to a clear error if
+    # unreachable), not something the addon's core startup should block on.
+
   app:
     build:
       context: .
@@ -59,7 +74,7 @@ services:
       # --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
       RUTRACKER_FEED_URLS: ${RUTRACKER_FEED_URLS:-}
       RUTRACKER_STORE_UNMATCHED: ${RUTRACKER_STORE_UNMATCHED:-false}
-      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-}
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     depends_on:
       postgres:
