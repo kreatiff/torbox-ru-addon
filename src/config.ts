@@ -32,6 +32,16 @@ const envSchema = z.object({
   // debugging the matcher. Off by default so feed_entries stays library-
   // scoped and bounded.
   RUTRACKER_STORE_UNMATCHED: z.coerce.boolean().default(false),
+  // Base URL of a FlareSolverr instance (e.g. http://flaresolverr:8191),
+  // used to fetch a matched entry's magnet link past RuTracker's Cloudflare
+  // Turnstile challenge -- a plain server-side fetch gets a 403 (verified
+  // directly against the live site; see docs/rutracker-scraper-plan.md).
+  // No default: the "Download" action degrades to a clear error, not a
+  // silent no-op, when this isn't configured.
+  FLARESOLVERR_URL: z.url().optional(),
+  // Discord incoming webhook URL. No default: notifications are entirely
+  // opt-in.
+  DISCORD_WEBHOOK_URL: z.url().optional(),
 });
 
 function loadConfig() {
@@ -63,6 +73,8 @@ function loadConfig() {
           .filter((url) => url.length > 0)
       : undefined,
     rutrackerStoreUnmatched: parsed.data.RUTRACKER_STORE_UNMATCHED,
+    flaresolverrUrl: parsed.data.FLARESOLVERR_URL,
+    discordWebhookUrl: parsed.data.DISCORD_WEBHOOK_URL,
   };
 }
 

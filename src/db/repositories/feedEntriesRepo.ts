@@ -12,6 +12,7 @@ export interface FeedEntryRecord {
   firstSeen: Date;
   lastUpdated: Date;
   notifiedAt: Date | null;
+  downloadedAt: Date | null;
 }
 
 function toFeedEntryRecord(row: FeedEntryRow): FeedEntryRecord {
@@ -23,6 +24,7 @@ function toFeedEntryRecord(row: FeedEntryRow): FeedEntryRecord {
     firstSeen: row.first_seen,
     lastUpdated: row.last_updated,
     notifiedAt: row.notified_at,
+    downloadedAt: row.downloaded_at,
   };
 }
 
@@ -75,7 +77,7 @@ export async function filterExistingTopicIds(topicIds: number[]): Promise<Set<nu
   return new Set(result.rows.map((row) => row.topic_id as number));
 }
 
-/** For Milestone 6's webhook boundary. */
+/** Drives the Discord notification step in pipeline.ts. */
 export async function listUnnotifiedEntries(): Promise<FeedEntryRecord[]> {
   const result = await pool.query(
     'select * from feed_entries where notified_at is null order by last_updated',
@@ -83,7 +85,9 @@ export async function listUnnotifiedEntries(): Promise<FeedEntryRecord[]> {
   return result.rows.map((row) => toFeedEntryRecord(feedEntryRowSchema.parse(row)));
 }
 
-/** For Milestone 6's webhook boundary. */
+/** Marks every one of these topic ids processed for notification purposes,
+ * whether or not a Discord message was actually sent for it (unmatched
+ * entries are marked too, so they aren't re-considered on every ingest). */
 export async function markNotified(topicIds: number[]): Promise<void> {
   if (topicIds.length === 0) {
     return;
@@ -91,6 +95,18 @@ export async function markNotified(topicIds: number[]): Promise<void> {
   await pool.query('update feed_entries set notified_at = now() where topic_id = any($1)', [
     topicIds,
   ]);
+}
+
+export async function getFeedEntryByTopicId(topicId: number): Promise<FeedEntryRecord | null> {
+  const result = await pool.query('select * from feed_entries where topic_id = $1', [topicId]);
+  const row = result.rows[0];
+  return row ? toFeedEntryRecord(feedEntryRowSchema.parse(row)) : null;
+}
+
+/** Idempotency marker for the manual "Download" action -- see the
+ * feed-entries-downloaded-at migration for why. */
+export async function markDownloaded(topicId: number): Promise<void> {
+  await pool.query('update feed_entries set downloaded_at = now() where topic_id = $1', [topicId]);
 }
 
 export interface FeedEntryWithTitleName extends FeedEntryRecord {

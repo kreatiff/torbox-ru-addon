@@ -569,6 +569,189 @@ describe.skipIf(!hasTestDb)('GET /api/health (real Postgres)', () => {
   });
 });
 
+describe.skipIf(!hasTestDb)('GET/POST /api/feed/:topicId/download (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    vi.spyOn(config, 'flaresolverrUrl', 'get').mockReturnValue('http://localhost:8191');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  async function seedFeedEntry(topicId: number): Promise<void> {
+    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated)
+       values ($1, $2, 'Большой куш. Бангкок 2 сезон: 5 выпуск', $3, now())`,
+      [topicId, title.rows[0].id, `https://rutracker.org/forum/viewtopic.php?t=${topicId}`],
+    );
+  }
+
+  function stubFlareSolverrAndTorBox(magnet: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes(':8191')) {
+          return new Response(
+            JSON.stringify({ status: 'ok', solution: { response: `<a href="${magnet}">m</a>` } }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('createtorrent')) {
+          return new Response(
+            JSON.stringify({ success: true, data: { torrent_id: 1, hash: 'abc' } }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`unexpected fetch in test: ${url}`);
+      }),
+    );
+  }
+
+  it('POST downloads a matched entry end to end and marks it downloaded', async () => {
+    await seedFeedEntry(1);
+    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:ABC');
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/1/download',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      success: true,
+      alreadyDownloaded: false,
+      rawTitle: 'Большой куш. Бангкок 2 сезон: 5 выпуск',
+    });
+
+    const row = await pool.query('select downloaded_at from feed_entries where topic_id = 1');
+    expect(row.rows[0].downloaded_at).not.toBeNull();
+    await app.close();
+  });
+
+  it('POST is idempotent: a second call short-circuits without calling FlareSolverr/TorBox again', async () => {
+    await seedFeedEntry(2);
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes(':8191')) {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            solution: { response: '<a href="magnet:?xt=urn:btih:ABC">m</a>' },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ success: true, data: { torrent_id: 1, hash: 'abc' } }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = build();
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/feed/2/download',
+      headers: { authorization: authHeader },
+    });
+    expect(first.json().alreadyDownloaded).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // FlareSolverr + TorBox
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/feed/2/download',
+      headers: { authorization: authHeader },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({
+      success: true,
+      alreadyDownloaded: true,
+      rawTitle: 'Большой куш. Бангкок 2 сезон: 5 выпуск',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2); // unchanged -- no re-fetch
+    await app.close();
+  });
+
+  it('POST returns 200 {success:false} (not a 5xx) when FlareSolverr cannot resolve a magnet', async () => {
+    await seedFeedEntry(3);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ status: 'ok', solution: { response: '' } }), {
+        status: 200,
+      })),
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/3/download',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      success: false,
+      error: 'No magnet link found on the topic page',
+    });
+    await app.close();
+  });
+
+  it('POST rejects a non-numeric topicId with 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/feed/not-a-number/download',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('GET renders an HTML confirmation page (for the Discord link) and still requires Basic Auth', async () => {
+    await seedFeedEntry(4);
+    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:ABC');
+
+    const app = build();
+
+    const unauthenticated = await app.inject({ method: 'GET', url: '/api/feed/4/download' });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed/4/download',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Added to TorBox');
+    expect(response.body).toContain('Большой куш'); // HTML-escaped-safe Cyrillic renders fine
+    await app.close();
+  });
+
+  it('GET HTML-escapes the raw title so a crafted feed title cannot inject markup', async () => {
+    const title = await pool.query(`insert into titles (name_ru) values ('X') returning id`);
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated)
+       values (5, $1, '<script>alert(1)</script>', 'https://rutracker.org/forum/viewtopic.php?t=5', now())`,
+      [title.rows[0].id],
+    );
+    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:ABC');
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed/5/download',
+      headers: { authorization: authHeader },
+    });
+    expect(response.body).not.toContain('<script>');
+    expect(response.body).toContain('&lt;script&gt;');
+    await app.close();
+  });
+});
+
 afterAll(async () => {
   if (hasTestDb) await pool.end();
 });

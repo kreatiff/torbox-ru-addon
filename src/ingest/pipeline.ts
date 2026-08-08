@@ -7,7 +7,13 @@ import { listActiveUnruledTorrents, listKnownHashes, markAbsentGone, upsertTorre
 import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
 import { findOrCreateTitle, findTitleByCleanedName, listAll as listAllTitles, type Title } from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
-import { filterExistingTopicIds, upsertFeedEntry } from '../db/repositories/feedEntriesRepo.js';
+import {
+  filterExistingTopicIds,
+  upsertFeedEntry,
+  listUnnotifiedEntries,
+  markNotified,
+} from '../db/repositories/feedEntriesRepo.js';
+import { notifyDiscordNewMatches } from '../notify/discord.js';
 import { parseTorrent } from '../extract/cascade.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
@@ -189,6 +195,20 @@ async function pollFeed(): Promise<{ feedEntriesMatched: number; feedEntriesNew:
       url: entry.url,
       lastUpdated: entry.updatedAt,
     });
+  }
+
+  // Discord notification: reuses notified_at exactly as designed (see the
+  // feed_entries migration) -- picks up brand-new matched rows from this
+  // run, plus any row that failed to notify on a previous run (retry-safe).
+  // Every processed row is marked notified, matched or not, so unmatched
+  // junk (only ever stored when RUTRACKER_STORE_UNMATCHED is set) isn't
+  // reconsidered on every run -- but only matched rows actually get a
+  // Discord message.
+  const unnotified = await listUnnotifiedEntries();
+  if (unnotified.length > 0) {
+    const toNotify = unnotified.filter((e) => e.titleId !== null);
+    await notifyDiscordNewMatches(toNotify);
+    await markNotified(unnotified.map((e) => e.topicId));
   }
 
   logger.info(

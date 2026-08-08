@@ -4,6 +4,7 @@ import { parseEnvelope, TorboxApiError } from './envelope.js';
 import {
   mylistResponseSchema,
   singleTorrentResponseSchema,
+  createTorrentResponseSchema,
   type TorboxTorrent,
 } from './schemas.js';
 
@@ -71,6 +72,38 @@ export async function getPlaybackUrl(torrentId: number, fileId: number): Promise
     );
   }
   return location;
+}
+
+/**
+ * POST /torrents/createtorrent (magnet field) — adds a torrent to the
+ * user's TorBox library from a magnet URI. Used by the RuTracker feed
+ * scraper's manual "Download" action (docs/rutracker-scraper-plan.md), not
+ * by the ingest pipeline itself -- this is always a human-initiated call.
+ * Multipart/form-data, not JSON, per TorBox's documented shape for this
+ * endpoint.
+ */
+export async function addTorrentMagnet(magnet: string): Promise<{ torrentId: number | null; hash: string | null }> {
+  const url = `${API_BASE_URL}/torrents/createtorrent`;
+  const form = new FormData();
+  form.append('magnet', magnet);
+  form.append('seed', '1');
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.torboxApiKey}` },
+    body: form,
+  });
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    logger.error({ url, status: response.status }, 'TorBox createtorrent response body was not valid JSON');
+    throw new TorboxApiError(`TorBox returned a non-JSON response (HTTP ${response.status})`, url);
+  }
+
+  const data = parseEnvelope(body, createTorrentResponseSchema, 'POST /torrents/createtorrent');
+  return { torrentId: data.torrent_id ?? null, hash: data.hash ?? null };
 }
 
 /**

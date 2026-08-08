@@ -113,5 +113,6 @@ export const feedEntryRowSchema = z.object({
   first_seen: z.date(),
   last_updated: z.date(),
   notified_at: z.date().nullable(),
+  downloaded_at: z.date().nullable(),
 });
 export type FeedEntryRow = z.infer<typeof feedEntryRowSchema>;

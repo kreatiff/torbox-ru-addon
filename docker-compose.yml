@@ -56,6 +56,11 @@ services:
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASS: ${ADMIN_PASS}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
+      RUTRACKER_FEED_URLS: ${RUTRACKER_FEED_URLS:-}
+      RUTRACKER_STORE_UNMATCHED: ${RUTRACKER_STORE_UNMATCHED:-false}
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -19,6 +19,9 @@ import {
   Clock,
   Database,
   FileText,
+  Rss,
+  Download,
+  ExternalLink,
 } from 'lucide-react';
 
 // Import the pure expandRule function and types from our backend src. Only
@@ -190,6 +193,25 @@ interface HealthData {
   recentPlays: RecentPlay[];
 }
 
+interface FeedItem {
+  topicId: number;
+  titleId: string | null;
+  titleName: string | null;
+  rawTitle: string;
+  url: string;
+  firstSeen: string;
+  lastUpdated: string;
+  notifiedAt: string | null;
+  downloadedAt: string | null;
+}
+
+interface DownloadFeedEntryResponse {
+  success: boolean;
+  alreadyDownloaded?: boolean;
+  rawTitle?: string;
+  error?: string;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -306,7 +328,9 @@ function formatBytes(bytes: number): string {
 
 function AdminApp() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'queue' | 'labeller' | 'library' | 'health'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'labeller' | 'library' | 'health' | 'feed'>(
+    'queue',
+  );
 
   // Navigation index for queue
   const [selectedQueueIdx, setSelectedQueueIdx] = useState<number>(0);
@@ -341,6 +365,25 @@ function AdminApp() {
     queryKey: ['torrentDetails', selectedTorrentHash],
     queryFn: () => apiFetch<TorrentDetails>(`/api/torrents/${selectedTorrentHash}`),
     enabled: !!selectedTorrentHash,
+  });
+
+  const { data: feed = [], isLoading: isFeedLoading } = useQuery({
+    queryKey: ['feed'],
+    queryFn: () => apiFetch<FeedItem[]>('/api/feed?limit=200'),
+  });
+
+  const downloadFeedEntry = useMutation({
+    mutationFn: (topicId: number) =>
+      apiFetch<DownloadFeedEntryResponse>(`/api/feed/${topicId}/download`, { method: 'POST' }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+      if (!result.success) {
+        alert(`Download failed: ${result.error ?? 'unknown error'}`);
+      }
+    },
+    onError: (err) => {
+      alert(`Download failed: ${err.message}`);
+    },
   });
 
   // Mutations
@@ -479,6 +522,18 @@ function AdminApp() {
             <Activity size={16} />
             Health Status
           </button>
+          <button
+            className={`sidebar-item ${activeTab === 'feed' ? 'active' : ''}`}
+            onClick={() => setActiveTab('feed')}
+          >
+            <Rss size={16} />
+            RuTracker Feed
+            {feed.filter((f) => !f.downloadedAt).length > 0 && (
+              <span className="badge neutral" style={{ marginLeft: 'auto' }}>
+                {feed.filter((f) => !f.downloadedAt).length}
+              </span>
+            )}
+          </button>
         </div>
 
         <div className="sidebar-footer">
@@ -543,6 +598,10 @@ function AdminApp() {
 
         {activeTab === 'health' && (
           <HealthView health={health} isLoading={isHealthLoading} triggerIngest={triggerIngest} />
+        )}
+
+        {activeTab === 'feed' && (
+          <FeedView feed={feed} isLoading={isFeedLoading} downloadFeedEntry={downloadFeedEntry} />
         )}
       </div>
     </div>
@@ -1638,6 +1697,87 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
             )}
           </div>
         </div>
+      </div>
+    </>
+  );
+}
+
+// --- FEED VIEW ---
+interface FeedViewProps {
+  feed: FeedItem[];
+  isLoading: boolean;
+  downloadFeedEntry: UseMutationResult<DownloadFeedEntryResponse, Error, number>;
+}
+function FeedView({ feed, isLoading, downloadFeedEntry }: FeedViewProps) {
+  const [downloadingTopicId, setDownloadingTopicId] = useState<number | null>(null);
+
+  if (isLoading) return <div className="view-body">Loading RuTracker feed...</div>;
+
+  return (
+    <>
+      <div className="view-header">
+        <h2>RuTracker Feed</h2>
+      </div>
+
+      <div className="view-body">
+        {feed.length === 0 ? (
+          <div style={{ textAlign: 'center', paddingTop: '100px' }}>
+            <Rss size={48} color="var(--text-muted)" style={{ marginBottom: '16px' }} />
+            <h3>No feed matches yet</h3>
+            <p style={{ color: 'var(--text-muted)' }}>
+              Entries matching a show in your Library will show up here after the next ingest run.
+            </p>
+          </div>
+        ) : (
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Show</th>
+                  <th>Raw Title</th>
+                  <th>Last Updated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {feed.map((item) => (
+                  <tr key={item.topicId}>
+                    <td style={{ fontWeight: 'bold' }}>{item.titleName ?? '(unmatched)'}</td>
+                    <td className="mono" style={{ fontSize: '12px' }}>
+                      <a href={item.url} target="_blank" rel="noreferrer">
+                        {item.rawTitle} <ExternalLink size={11} style={{ verticalAlign: 'middle' }} />
+                      </a>
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {new Date(item.lastUpdated).toLocaleString()}
+                    </td>
+                    <td>
+                      {item.downloadedAt ? (
+                        <span className="badge success">
+                          <CheckCircle size={12} /> Downloaded
+                        </span>
+                      ) : (
+                        <button
+                          className="btn btn-primary"
+                          disabled={downloadFeedEntry.isPending && downloadingTopicId === item.topicId}
+                          onClick={() => {
+                            setDownloadingTopicId(item.topicId);
+                            downloadFeedEntry.mutate(item.topicId);
+                          }}
+                        >
+                          <Download size={14} />
+                          {downloadFeedEntry.isPending && downloadingTopicId === item.topicId
+                            ? 'Downloading...'
+                            : 'Download'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </>
   );
