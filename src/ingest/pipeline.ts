@@ -1,12 +1,19 @@
-import { logger } from '../logger.js';
 import { config } from '../config.js';
+import { logger } from '../logger.js';
 import { getMylist, getTorrentById, refreshWebdav } from '../torbox/client.js';
 import { throttledMap } from '../torbox/rateLimit.js';
 import type { TorboxFile, TorboxTorrent } from '../torbox/schemas.js';
 import { listActiveUnruledTorrents, listKnownHashes, markAbsentGone, upsertTorrent } from '../db/repositories/torrentsRepo.js';
 import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
-import { findOrCreateTitle, findTitleByCleanedName, type Title } from '../db/repositories/titlesRepo.js';
+import { findOrCreateTitle, findTitleByCleanedName, listAll as listAllTitles, type Title } from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
+import {
+  filterExistingTopicIds,
+  upsertFeedEntry,
+  listUnnotifiedEntries,
+  markNotified,
+} from '../db/repositories/feedEntriesRepo.js';
+import { notifyDiscordNewMatches } from '../notify/discord.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
@@ -14,6 +21,7 @@ import { isVideoFile } from './isVideoFile.js';
 import type { TitleMatch } from '../resolve/confidence.js';
 import { fetchExternalIds, fetchSeasonDetails, searchTitles, type TmdbSearchResult } from '../metadata/tmdb.js';
 import { extractEpisodes, type LlmExtraction } from '../llm/opencodeZen.js';
+import { fetchFeed, matchEntries } from '../rutracker/index.js';
 
 export interface IngestSummary {
   webdavRefreshed: boolean;
@@ -22,6 +30,8 @@ export interface IngestSummary {
   torrentsMarkedGone: number;
   filesUpserted: number;
   perIdFetches: number;
+  feedEntriesMatched: number;
+  feedEntriesNew: number;
   proposalsCreated: number;
   proposalsAutoCommitted: number;
   proposalsQueued: number;
@@ -169,6 +179,68 @@ async function fetchTmdbSeason(
 }
 
 /**
+ * RuTracker feed scraper (docs/rutracker-scraper-plan.md): poll the
+ * configured Atom feed(s), match entries against the library, and upsert
+ * matched entries into feed_entries. Unmatched entries are dropped unless
+ * RUTRACKER_STORE_UNMATCHED is set, keeping the table library-scoped and
+ * bounded. Purely observational -- never touches torrents/rules/mappings.
+ */
+async function pollFeed(): Promise<{ feedEntriesMatched: number; feedEntriesNew: number }> {
+  const feedEntries = await fetchFeed();
+  if (feedEntries.length === 0) {
+    return { feedEntriesMatched: 0, feedEntriesNew: 0 };
+  }
+
+  const titles = await listAllTitles();
+  const matched = matchEntries(feedEntries, titles);
+  const matchedTopicIds = new Set(matched.map((m) => m.entry.topicId));
+
+  const toStore = matched.map((m) => ({ entry: m.entry, titleId: m.title.id as string | null }));
+  if (config.rutrackerStoreUnmatched) {
+    for (const entry of feedEntries) {
+      if (!matchedTopicIds.has(entry.topicId)) {
+        toStore.push({ entry, titleId: null });
+      }
+    }
+  }
+
+  const existingTopicIds = await filterExistingTopicIds(toStore.map((s) => s.entry.topicId));
+  let feedEntriesNew = 0;
+  for (const { entry, titleId } of toStore) {
+    if (!existingTopicIds.has(entry.topicId)) {
+      feedEntriesNew++;
+    }
+    await upsertFeedEntry({
+      topicId: entry.topicId,
+      titleId,
+      rawTitle: entry.rawTitle,
+      url: entry.url,
+      lastUpdated: entry.updatedAt,
+    });
+  }
+
+  // Discord notification: reuses notified_at exactly as designed (see the
+  // feed_entries migration) -- picks up brand-new matched rows from this
+  // run, plus any row that failed to notify on a previous run (retry-safe).
+  // Every processed row is marked notified, matched or not, so unmatched
+  // junk (only ever stored when RUTRACKER_STORE_UNMATCHED is set) isn't
+  // reconsidered on every run -- but only matched rows actually get a
+  // Discord message.
+  const unnotified = await listUnnotifiedEntries();
+  if (unnotified.length > 0) {
+    const toNotify = unnotified.filter((e) => e.titleId !== null);
+    await notifyDiscordNewMatches(toNotify);
+    await markNotified(unnotified.map((e) => e.topicId));
+  }
+
+  logger.info(
+    { feedEntriesSeen: feedEntries.length, feedEntriesMatched: matched.length, feedEntriesNew },
+    'feed poll complete',
+  );
+  return { feedEntriesMatched: matched.length, feedEntriesNew };
+}
+
+/**
  * Milestone 1+2 scope: refresh -> fetch -> upsert torrents -> fetch files
  * for new hashes -> mark absent gone -> rebuild mappings for every existing
  * rule. "Propose rules for unruled torrents" (§5.2) still doesn't run here —
@@ -244,6 +316,11 @@ export async function runIngest(): Promise<IngestSummary> {
       'torrents marked gone (absent from this mylist response)',
     );
   }
+
+  // RuTracker feed scraper (docs/rutracker-scraper-plan.md): purely
+  // observational, additive. fetchFeed() never throws (see its own
+  // comments), so a RuTracker outage can't take the rest of this run down.
+  const { feedEntriesMatched, feedEntriesNew } = await pollFeed();
 
   // Milestone 5 (now LLM-based, see docs/decisions.md): propose rules for
   // active torrents that still have no rule. Throttled at
@@ -322,6 +399,8 @@ export async function runIngest(): Promise<IngestSummary> {
     torrentsMarkedGone,
     filesUpserted,
     perIdFetches: needingFetch.length,
+    feedEntriesMatched,
+    feedEntriesNew,
     proposalsCreated,
     proposalsAutoCommitted,
     proposalsQueued,

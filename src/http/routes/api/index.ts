@@ -12,10 +12,12 @@ import {
   deleteRule,
   getTorrentByHash,
   listVideoFilesForTorrent,
+  listFeedEntries,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
+import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
 import { naturalCompare } from '../../../extract/naturalSort.js';
 import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
 import { proposeRule } from '../../../resolve/proposeRule.js';
@@ -55,6 +57,27 @@ const saveRuleBodySchema = z.object({
   ruleId: z.string().optional(),
   torrentName: z.string().optional(),
 });
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// rawTitle comes from the RuTracker feed (external, adversarial-ish input),
+// so it's HTML-escaped before being interpolated into a text/html response
+// -- this route exists specifically to be opened as a plain link (from
+// Discord or a browser), unlike the rest of /api which only ever returns
+// JSON to fetch() calls.
+function renderDownloadResultHtml(success: boolean, message: string): string {
+  const escaped = escapeHtml(message);
+  const title = success ? 'Downloaded' : 'Download failed';
+  const icon = success ? '✅' : '❌';
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family: system-ui, sans-serif; padding: 2rem; max-width: 40rem;"><h2>${icon} ${escaped}</h2></body></html>`;
+}
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // Gated by Basic Auth for all /api endpoints
@@ -519,6 +542,75 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       filesNoMountPath,
       recentPlays,
     };
+  });
+
+  // GET /api/feed - RuTracker feed entries matched against the library
+  // (docs/rutracker-scraper-plan.md), newest last_updated first.
+  app.get('/feed', async (request, _reply) => {
+    const { limit, offset } = request.query as { limit?: string; offset?: string };
+    const options: Parameters<typeof listFeedEntries>[0] = {};
+    if (limit !== undefined) options.limit = Number(limit);
+    if (offset !== undefined) options.offset = Number(offset);
+    const entries = await listFeedEntries(options);
+    return entries.map((e) => ({
+      topicId: e.topicId,
+      titleId: e.titleId,
+      titleName: e.titleName,
+      rawTitle: e.rawTitle,
+      url: e.url,
+      firstSeen: e.firstSeen,
+      lastUpdated: e.lastUpdated,
+      notifiedAt: e.notifiedAt,
+      downloadedAt: e.downloadedAt,
+    }));
+  });
+
+  // POST /api/feed/:topicId/download - manual Download action from the
+  // admin UI's Feed tab. JSON in, JSON out. A failed magnet/TorBox lookup is
+  // a normal, expected outcome here (Cloudflare flakiness, a dead topic),
+  // not a server error -- returned as 200 {success:false, error} like the
+  // rest of this file's mutation routes, so the UI's apiFetch (which throws
+  // on any non-2xx status) can distinguish "call succeeded, action failed"
+  // from a real protocol/auth failure. Only a malformed topicId is a genuine
+  // 400.
+  app.post('/feed/:topicId/download', async (request, reply) => {
+    const { topicId } = request.params as { topicId: string };
+    const id = Number(topicId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ success: false, error: 'topicId must be an integer' });
+    }
+    const result = await downloadFeedEntry(id);
+    if (!result.ok) {
+      return { success: false, error: result.error };
+    }
+    return { success: true, alreadyDownloaded: result.alreadyDownloaded, rawTitle: result.rawTitle };
+  });
+
+  // GET /api/feed/:topicId/download - same action, reachable as a plain
+  // clickable link (the Discord notification's download link uses this --
+  // a Discord embed link can only ever issue a GET). Still gated by the
+  // same Basic Auth as every other /api route: the browser prompts for the
+  // admin credentials on first click, same as opening /admin. Deliberately
+  // mutates on GET rather than being REST-pure, because a clickable link
+  // can't issue a POST -- mitigated by being both auth-gated and
+  // idempotent (downloadFeedEntry short-circuits if already downloaded),
+  // so an accidental re-fetch (e.g. a link-preview bot, if one ever got
+  // past the auth gate) is harmless rather than compounding.
+  app.get('/feed/:topicId/download', async (request, reply) => {
+    const { topicId } = request.params as { topicId: string };
+    const id = Number(topicId);
+    reply.type('text/html');
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send(renderDownloadResultHtml(false, 'topicId must be an integer'));
+    }
+    const result = await downloadFeedEntry(id);
+    if (!result.ok) {
+      return reply.code(502).send(renderDownloadResultHtml(false, result.error));
+    }
+    const message = result.alreadyDownloaded
+      ? `Already sent to TorBox: ${result.rawTitle}`
+      : `Added to TorBox: ${result.rawTitle}`;
+    return renderDownloadResultHtml(true, message);
   });
 
   // POST /api/ingest/run - Trigger ingest run

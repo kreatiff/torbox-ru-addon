@@ -30,6 +30,25 @@ const envSchema = z.object({
   // defeats that gate entirely -- same reasoning as ADDON_TOKEN above.
   ADMIN_USER: z.string().min(1, 'ADMIN_USER is required'),
   ADMIN_PASS: z.string().min(1, 'ADMIN_PASS is required'),
+  // --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
+  // Comma-separated Atom feed URLs. No default: an unset value forces the
+  // consumer to fall back to the hardcoded constant inside fetchFeed.ts --
+  // same pattern as NOT_WEB_READY_EXTENSIONS above.
+  RUTRACKER_FEED_URLS: z.string().optional(),
+  // Persist feed entries with no matching title (title_id = NULL), for
+  // debugging the matcher. Off by default so feed_entries stays library-
+  // scoped and bounded.
+  RUTRACKER_STORE_UNMATCHED: z.coerce.boolean().default(false),
+  // Base URL of a FlareSolverr instance (e.g. http://flaresolverr:8191),
+  // used to fetch a matched entry's magnet link past RuTracker's Cloudflare
+  // Turnstile challenge -- a plain server-side fetch gets a 403 (verified
+  // directly against the live site; see docs/rutracker-scraper-plan.md).
+  // No default: the "Download" action degrades to a clear error, not a
+  // silent no-op, when this isn't configured.
+  FLARESOLVERR_URL: z.url().optional(),
+  // Discord incoming webhook URL. No default: notifications are entirely
+  // opt-in.
+  DISCORD_WEBHOOK_URL: z.url().optional(),
 });
 
 function loadConfig() {
@@ -58,6 +77,14 @@ function loadConfig() {
     opencodeZenApiKey: parsed.data.OPENCODE_ZEN_API_KEY,
     opencodeZenModel: parsed.data.OPENCODE_ZEN_MODEL,
     opencodeZenRequestDelayMs: parsed.data.OPENCODE_ZEN_REQUEST_DELAY_MS,
+    rutrackerFeedUrls: parsed.data.RUTRACKER_FEED_URLS
+      ? parsed.data.RUTRACKER_FEED_URLS.split(',')
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0)
+      : undefined,
+    rutrackerStoreUnmatched: parsed.data.RUTRACKER_STORE_UNMATCHED,
+    flaresolverrUrl: parsed.data.FLARESOLVERR_URL,
+    discordWebhookUrl: parsed.data.DISCORD_WEBHOOK_URL,
   };
 }
 

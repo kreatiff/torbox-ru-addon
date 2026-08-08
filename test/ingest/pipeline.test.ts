@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
@@ -8,6 +11,12 @@ vi.mock('../../src/llm/opencodeZen.js', () => ({
   extractEpisodes: vi.fn(),
 }));
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rutrackerFixtureXml = readFileSync(
+  path.join(__dirname, '../fixtures/rutracker-f939.xml'),
+  'utf-8',
+);
+
 interface MockTorrent {
   id: number;
   hash: string;
@@ -16,7 +25,11 @@ interface MockTorrent {
   files?: { id: number; name: string; size: number }[];
 }
 
-function stubTorboxApi(opts: { mylist: MockTorrent[]; byId?: Record<number, MockTorrent> }) {
+function stubTorboxApi(opts: {
+  mylist: MockTorrent[];
+  byId?: Record<number, MockTorrent>;
+  feedXml?: string;
+}) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL) => {
@@ -32,6 +45,14 @@ function stubTorboxApi(opts: { mylist: MockTorrent[]; byId?: Record<number, Mock
       }
       if (url.includes('/torrents/mylist')) {
         return new Response(JSON.stringify({ success: true, data: opts.mylist }), { status: 200 });
+      }
+      if (url.includes('feed.rutracker.cc')) {
+        // No opts.feedXml means "feed unreachable in this test" -- fetchFeed
+        // swallows this (never throws), so most tests don't need to care.
+        if (opts.feedXml === undefined) {
+          throw new Error('rutracker feed not stubbed for this test');
+        }
+        return new Response(opts.feedXml, { status: 200 });
       }
       throw new Error(`unexpected fetch in test: ${url}`);
     }),
@@ -325,5 +346,49 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
        where r.torrent_hash = 'hash-h' order by m.episode`,
     );
     expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }, { episode: 3 }]);
+  });
+
+  it('polls the RuTracker feed, matches against the library, and upserts feed_entries', async () => {
+    await pool.query(`insert into titles (name_ru) values ('Большой куш')`);
+    stubTorboxApi({
+      mylist: [{ id: 9, hash: 'hash-h', name: 'Show', files: [] }],
+      feedXml: rutrackerFixtureXml,
+    });
+
+    const first = await runIngest();
+    expect(first.feedEntriesMatched).toBe(5);
+    expect(first.feedEntriesNew).toBe(5);
+
+    const rows = await pool.query(
+      `select fe.topic_id, t.name_ru
+       from feed_entries fe join titles t on t.id = fe.title_id
+       order by fe.topic_id`,
+    );
+    expect(rows.rows).toHaveLength(5);
+    expect(rows.rows.every((r) => r.name_ru === 'Большой куш')).toBe(true);
+
+    // Second run against the same feed: still matches the same 5 entries,
+    // but none of them are new this time.
+    const second = await runIngest();
+    expect(second.feedEntriesMatched).toBe(5);
+    expect(second.feedEntriesNew).toBe(0);
+
+    const countAfterSecondRun = await pool.query('select count(*) from feed_entries');
+    expect(Number(countAfterSecondRun.rows[0].count)).toBe(5);
+  });
+
+  it('does not store unmatched feed entries by default', async () => {
+    // No titles inserted at all -- every one of the fixture's 50 entries is
+    // unmatched.
+    stubTorboxApi({
+      mylist: [{ id: 10, hash: 'hash-i', name: 'Show', files: [] }],
+      feedXml: rutrackerFixtureXml,
+    });
+
+    const summary = await runIngest();
+    expect(summary.feedEntriesMatched).toBe(0);
+
+    const count = await pool.query('select count(*) from feed_entries');
+    expect(Number(count.rows[0].count)).toBe(0);
   });
 });

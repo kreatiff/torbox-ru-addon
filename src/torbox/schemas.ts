@@ -40,3 +40,18 @@ export const mylistResponseSchema = z.array(torboxTorrentSchema);
 
 /** GET /torrents/mylist with &id=N — data is a single object, not an array. */
 export const singleTorrentResponseSchema = torboxTorrentSchema;
+
+/** POST /torrents/createtorrent (magnet field). Same "not verified against
+ * live API docs" caveat as the rest of this file -- every field is
+ * optional/nullable so a mismatch degrades to a logged parse failure via
+ * parseEnvelope, not a crash. Unknown fields are stripped, not rejected
+ * (zod's default object behaviour), so extra response fields are harmless. */
+export const createTorrentResponseSchema = z.object({
+  torrent_id: z
+    .union([z.number(), z.string()])
+    .transform((v) => Number(v))
+    .nullable()
+    .optional(),
+  hash: z.string().nullable().optional(),
+});
+export type CreateTorrentResponse = z.infer<typeof createTorrentResponseSchema>;
