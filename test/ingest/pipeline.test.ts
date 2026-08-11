@@ -7,15 +7,16 @@ import { pool } from '../../src/db/pool.js';
 import { runIngest } from '../../src/ingest/pipeline.js';
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 import { notifyDiscordEpisodesProcessed } from '../../src/notify/discord.js';
+import type * as DiscordModule from '../../src/notify/discord.js';
 
 vi.mock('../../src/llm/opencodeZen.js', () => ({
   extractEpisodes: vi.fn(),
 }));
 
-vi.mock('../../src/notify/discord.js', () => ({
-  notifyDiscordNewMatches: vi.fn(),
-  notifyDiscordEpisodesProcessed: vi.fn(),
-}));
+vi.mock('../../src/notify/discord.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof DiscordModule>();
+  return { ...actual, notifyDiscordNewMatches: vi.fn(), notifyDiscordEpisodesProcessed: vi.fn() };
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rutrackerFixtureXml = readFileSync(
@@ -271,6 +272,15 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     expect(notifyDiscordEpisodesProcessed).toHaveBeenCalledWith([
       { titleName: 'Clean Show', season: 1, episodes: [1, 2] },
     ]);
+
+    // Same event also lands in the always-on in-app activity log,
+    // independent of Discord being configured at all.
+    const activity = await pool.query(
+      `select source, message from activity_log where source = 'torbox'`,
+    );
+    expect(activity.rows).toEqual([
+      { source: 'torbox', message: 'Clean Show — S01E01–E02 (2 episodes) processed and added to the library.' },
+    ]);
   });
 
   it('does not materialise mappings for an auto-proposed rule when the LLM reports itself not confident, even though the title matches an existing show', async () => {
@@ -386,14 +396,28 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     expect(rows.rows).toHaveLength(5);
     expect(rows.rows.every((r) => r.name_ru === 'Большой куш')).toBe(true);
 
+    // Every matched entry also lands in the in-app activity log, resolved
+    // against the show it matched (not just the raw feed title).
+    const activityAfterFirstRun = await pool.query(
+      `select message from activity_log where source = 'rutracker'`,
+    );
+    expect(activityAfterFirstRun.rows).toHaveLength(5);
+    expect(activityAfterFirstRun.rows.every((r) => r.message.includes('to Большой куш.'))).toBe(true);
+
     // Second run against the same feed: still matches the same 5 entries,
-    // but none of them are new this time.
+    // but none of them are new this time -- already-notified rows don't get
+    // a second activity log entry.
     const second = await runIngest();
     expect(second.feedEntriesMatched).toBe(5);
     expect(second.feedEntriesNew).toBe(0);
 
     const countAfterSecondRun = await pool.query('select count(*) from feed_entries');
     expect(Number(countAfterSecondRun.rows[0].count)).toBe(5);
+
+    const activityAfterSecondRun = await pool.query(
+      `select count(*) from activity_log where source = 'rutracker'`,
+    );
+    expect(Number(activityAfterSecondRun.rows[0].count)).toBe(5);
   });
 
   it('does not store unmatched feed entries by default', async () => {

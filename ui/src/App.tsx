@@ -223,6 +223,13 @@ interface HealthData {
   recentPlays: RecentPlay[];
 }
 
+interface ActivityEntry {
+  id: number;
+  source: 'torbox' | 'rutracker';
+  message: string;
+  at: string;
+}
+
 interface FeedItem {
   topicId: number;
   titleId: string | null;
@@ -473,6 +480,12 @@ function AdminApp() {
   const { data: health, isLoading: isHealthLoading } = useQuery({
     queryKey: ['health'],
     queryFn: () => apiFetch<HealthData>('/api/health'),
+    refetchInterval: 10000,
+  });
+
+  const { data: activity = [], isLoading: isActivityLoading } = useQuery({
+    queryKey: ['activity'],
+    queryFn: () => apiFetch<ActivityEntry[]>('/api/activity?limit=50'),
     refetchInterval: 10000,
   });
 
@@ -771,6 +784,8 @@ function AdminApp() {
             triggerIngest={triggerIngest}
             deleteTorrent={deleteTorrent}
             purgeGoneTorrents={purgeGoneTorrents}
+            activity={activity}
+            isActivityLoading={isActivityLoading}
           />
         )}
 
@@ -1830,6 +1845,8 @@ interface HealthViewProps {
   triggerIngest: UseMutationResult<IngestRunResult, Error, void>;
   deleteTorrent: UseMutationResult<{ success: boolean }, Error, string>;
   purgeGoneTorrents: UseMutationResult<{ success: boolean; deletedCount: number }, Error, void>;
+  activity: ActivityEntry[];
+  isActivityLoading: boolean;
 }
 function HealthView({
   health,
@@ -1837,6 +1854,8 @@ function HealthView({
   triggerIngest,
   deleteTorrent,
   purgeGoneTorrents,
+  activity,
+  isActivityLoading,
 }: HealthViewProps) {
   if (isLoading || !health) return <LoadingState label="Loading health statistics..." />;
 
@@ -2010,6 +2029,50 @@ function HealthView({
               </div>
             )}
           </div>
+        </div>
+
+        {/* Recent Activity -- both TorBox auto-mapping and RuTracker
+            matches, merged into one chronological log. A lite, always-on
+            in-app alternative to the Discord notifications (which need
+            DISCORD_WEBHOOK_URL configured) -- see src/db/repositories/
+            activityLogRepo.ts. */}
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Recent Activity</h3>
+          </div>
+          {isActivityLoading ? (
+            <p className="panel-empty">Loading...</p>
+          ) : activity.length === 0 ? (
+            <p className="panel-empty">
+              Nothing logged yet -- this fills in as torrents get auto-mapped and RuTracker
+              entries get matched.
+            </p>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                maxHeight: '320px',
+                overflowY: 'auto',
+              }}
+            >
+              {activity.map((entry) => (
+                <div key={entry.id} className="list-item">
+                  <div className="list-item-main">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className={`badge ${entry.source === 'torbox' ? 'info' : 'success'}`}>
+                        {entry.source === 'torbox' ? <Box size={11} /> : <Rss size={11} />}
+                        {entry.source === 'torbox' ? 'TorBox' : 'RuTracker'}
+                      </span>
+                      <span style={{ fontSize: '12px' }}>{entry.message}</span>
+                    </div>
+                    <div className="list-item-meta">{new Date(entry.at).toLocaleString()}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </>

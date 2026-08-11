@@ -16,8 +16,10 @@ import {
 import {
   notifyDiscordNewMatches,
   notifyDiscordEpisodesProcessed,
+  formatEpisodeRange,
   type ProcessedEpisodeNotification,
 } from '../notify/discord.js';
+import { logActivity } from '../db/repositories/activityLogRepo.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
@@ -234,6 +236,16 @@ async function pollFeed(): Promise<{ feedEntriesMatched: number; feedEntriesNew:
   if (unnotified.length > 0) {
     const toNotify = unnotified.filter((e) => e.titleId !== null);
     await notifyDiscordNewMatches(toNotify);
+
+    const titleNameById = new Map(titles.map((t) => [t.id, t.nameRu]));
+    for (const entry of toNotify) {
+      const titleName = entry.titleId ? titleNameById.get(entry.titleId) : undefined;
+      await logActivity(
+        'rutracker',
+        titleName ? `Matched "${entry.rawTitle}" to ${titleName}.` : `Matched "${entry.rawTitle}".`,
+      );
+    }
+
     await markNotified(unnotified.map((e) => e.topicId));
   }
 
@@ -389,7 +401,12 @@ export async function runIngest(): Promise<IngestSummary> {
               episodesBySeason.set(m.season, episodes);
             }
             for (const [season, episodes] of episodesBySeason) {
-              processedForNotification.push({ titleName, season, episodes: [...episodes] });
+              const episodeList = [...episodes];
+              processedForNotification.push({ titleName, season, episodes: episodeList });
+              await logActivity(
+                'torbox',
+                `${titleName} — ${formatEpisodeRange(season, episodeList)} processed and added to the library.`,
+              );
             }
           } catch (err) {
             logger.warn({ err, hash: torrent.hash }, 'auto-proposed rule accepted but rebuild failed');

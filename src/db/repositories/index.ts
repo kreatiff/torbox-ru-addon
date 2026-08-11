@@ -6,4 +6,5 @@ export * from './titlesRepo.js';
 export * from './playLogRepo.js';
 export * from './providerSeasonsRepo.js';
 export * from './feedEntriesRepo.js';
+export * from './activityLogRepo.js';
 

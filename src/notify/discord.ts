@@ -62,7 +62,9 @@ export interface ProcessedEpisodeNotification {
   episodes: number[];
 }
 
-function formatEpisodeRange(season: number, episodes: number[]): string {
+/** Exported for reuse by the activity-log message text (src/ingest/pipeline.ts),
+ * so the in-app log and the Discord embed always read identically. */
+export function formatEpisodeRange(season: number, episodes: number[]): string {
   const sorted = [...episodes].sort((a, b) => a - b);
   const seasonLabel = `S${String(season).padStart(2, '0')}`;
   if (sorted.length === 1) {

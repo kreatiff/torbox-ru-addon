@@ -116,3 +116,13 @@ export const feedEntryRowSchema = z.object({
   downloaded_at: z.date().nullable(),
 });
 export type FeedEntryRow = z.infer<typeof feedEntryRowSchema>;
+
+export const activityLogSourceSchema = z.enum(['torbox', 'rutracker']);
+
+export const activityLogRowSchema = z.object({
+  id: z.number().int(),
+  source: activityLogSourceSchema,
+  message: z.string(),
+  at: z.date(),
+});
+export type ActivityLogRow = z.infer<typeof activityLogRowSchema>;

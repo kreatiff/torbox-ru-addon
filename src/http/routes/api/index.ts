@@ -17,6 +17,7 @@ import {
   listMappedEpisodeKeys,
   deleteTorrent,
   deleteGoneTorrents,
+  listRecentActivity,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
@@ -572,6 +573,16 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       filesNoMountPath,
       recentPlays,
     };
+  });
+
+  // GET /api/activity - Recent activity log (both TorBox auto-mapped
+  // episodes and RuTracker feed matches), newest first. Lite, always-on
+  // alternative to the Discord notifications in src/notify/discord.ts --
+  // see activityLogRepo.ts and where runIngest calls logActivity.
+  app.get('/activity', async (request, _reply) => {
+    const { limit } = request.query as { limit?: string };
+    const entries = await listRecentActivity(limit !== undefined ? Number(limit) : undefined);
+    return entries;
   });
 
   // GET /api/feed - RuTracker feed entries matched against the library
