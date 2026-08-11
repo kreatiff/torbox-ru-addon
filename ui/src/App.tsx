@@ -24,6 +24,8 @@ import {
   ExternalLink,
   Trash2,
   X,
+  Box,
+  Loader2,
 } from 'lucide-react';
 
 // Import the pure expandRule function and types from our backend src. Only
@@ -362,6 +364,43 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// Shared centered loading indicator, used in place of a plain "Loading..."
+// text node everywhere a view is waiting on its primary query.
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="view-body">
+      <div className="state-message">
+        <Loader2 size={24} className="spin" color="var(--text-dim)" />
+        <p style={{ marginTop: '8px' }}>{label}</p>
+      </div>
+    </div>
+  );
+}
+
+// Shared centered empty state (icon + heading + description), used by any
+// view whose primary list can legitimately be empty.
+function EmptyState({
+  icon: Icon,
+  iconColor,
+  title,
+  description,
+}: {
+  icon: React.ComponentType<{ size?: number; color?: string }>;
+  iconColor: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="state-message">
+      <div className="state-message-icon" style={{ backgroundColor: `color-mix(in srgb, ${iconColor} 12%, transparent)` }}>
+        <Icon size={28} color={iconColor} />
+      </div>
+      <h3>{title}</h3>
+      <p>{description}</p>
+    </div>
+  );
+}
+
 type TabId = 'queue' | 'labeller' | 'library' | 'health' | 'feed';
 const VALID_TABS: TabId[] = ['queue', 'labeller', 'library', 'health', 'feed'];
 
@@ -600,8 +639,13 @@ function AdminApp() {
       {/* Sidebar */}
       <div className="sidebar">
         <div className="sidebar-header">
-          <h1>TorBox RU Addon</h1>
-          <span>Self-hosted Russian TV Mapper</span>
+          <div className="sidebar-brand-mark">
+            <Box size={16} />
+          </div>
+          <div className="sidebar-header-text">
+            <h1>TorBox RU Addon</h1>
+            <span>Self-hosted Russian TV Mapper</span>
+          </div>
         </div>
 
         <div className="sidebar-menu">
@@ -845,7 +889,7 @@ function QueueView({
     return (
       <>
         {header}
-        <div className="view-body">Loading queue...</div>
+        <LoadingState label="Loading queue..." />
       </>
     );
   }
@@ -854,10 +898,13 @@ function QueueView({
     return (
       <>
         {header}
-        <div className="view-body" style={{ textAlign: 'center', paddingTop: '100px' }}>
-          <CheckCircle size={48} color="var(--accent-success)" style={{ marginBottom: '16px' }} />
-          <h3>All caught up!</h3>
-          <p style={{ color: 'var(--text-muted)' }}>There are no active torrents awaiting review.</p>
+        <div className="view-body">
+          <EmptyState
+            icon={CheckCircle}
+            iconColor="var(--accent-success)"
+            title="All caught up!"
+            description="There are no active torrents awaiting review."
+          />
         </div>
       </>
     );
@@ -1039,7 +1086,7 @@ function LabellerView({
     }
   };
 
-  if (isLoading || !details) return <div className="view-body">Loading files details...</div>;
+  if (isLoading || !details) return <LoadingState label="Loading files details..." />;
 
   const editingRule = initialRuleId ? details.rules.find((r) => r.id === initialRuleId) : undefined;
 
@@ -1345,32 +1392,11 @@ function LabellerView({
 
                 {/* Show Search Autocomplete Drawer */}
                 {searchResults.length > 0 && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      backgroundColor: 'var(--bg-surface-elevated)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      maxHeight: '200px',
-                      overflowY: 'auto',
-                      zIndex: 10,
-                      marginTop: '4px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                    }}
-                  >
+                  <div className="dropdown-panel">
                     {searchResults.map((show) => (
                       <div
                         key={show.tmdbId}
-                        style={{
-                          display: 'flex',
-                          gap: '12px',
-                          padding: '8px 12px',
-                          borderBottom: '1px solid var(--border)',
-                          cursor: 'pointer',
-                        }}
+                        className="dropdown-panel-item"
                         onClick={() => {
                           // A fresh pick from search, never a stale
                           // titleId from whatever was previously selected
@@ -1386,7 +1412,6 @@ function LabellerView({
                           });
                           setSearchResults([]);
                         }}
-                        className="hover-highlight"
                       >
                         {show.posterUrl ? (
                           <img
@@ -1396,7 +1421,7 @@ function LabellerView({
                               width: '30px',
                               height: '45px',
                               objectFit: 'cover',
-                              borderRadius: '2px',
+                              borderRadius: '4px',
                             }}
                           />
                         ) : (
@@ -1405,7 +1430,7 @@ function LabellerView({
                               width: '30px',
                               height: '45px',
                               backgroundColor: 'var(--bg-main)',
-                              borderRadius: '2px',
+                              borderRadius: '4px',
                             }}
                           />
                         )}
@@ -1423,16 +1448,7 @@ function LabellerView({
 
               {/* Show selected metadata card */}
               {selectedShow && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    padding: '12px',
-                    backgroundColor: 'var(--bg-surface-elevated)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '6px',
-                  }}
-                >
+                <div className="meta-card">
                   {selectedShow.posterUrl && (
                     <img
                       src={selectedShow.posterUrl}
@@ -1644,7 +1660,7 @@ interface LibraryViewProps {
 function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
   const [filter, setFilter] = useState('');
 
-  if (isLoading) return <div className="view-body">Loading library grid...</div>;
+  if (isLoading) return <LoadingState label="Loading library grid..." />;
 
   const normalisedFilter = filter.trim().toLowerCase();
   const filteredLibrary =
@@ -1678,13 +1694,12 @@ function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
       </div>
       <div className="view-body">
         {library.length === 0 ? (
-          <div style={{ textAlign: 'center', paddingTop: '100px' }}>
-            <FolderOpen size={48} color="var(--text-muted)" style={{ marginBottom: '16px' }} />
-            <h3>Library is empty</h3>
-            <p style={{ color: 'var(--text-muted)' }}>
-              Shows will appear here once torrents in the Queue are mapped.
-            </p>
-          </div>
+          <EmptyState
+            icon={FolderOpen}
+            iconColor="var(--text-dim)"
+            title="Library is empty"
+            description="Shows will appear here once torrents in the Queue are mapped."
+          />
         ) : filteredLibrary.length === 0 ? (
           <p className="panel-empty">No shows match "{filter}".</p>
         ) : (
@@ -1823,7 +1838,7 @@ function HealthView({
   deleteTorrent,
   purgeGoneTorrents,
 }: HealthViewProps) {
-  if (isLoading || !health) return <div className="view-body">Loading health statistics...</div>;
+  if (isLoading || !health) return <LoadingState label="Loading health statistics..." />;
 
   return (
     <>
@@ -1842,7 +1857,9 @@ function HealthView({
         {/* Row of stats cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
           <div className="stat-card">
-            <Clock size={32} color="var(--accent-info)" />
+            <div className="stat-card-icon stat-card-icon-info">
+              <Clock size={20} />
+            </div>
             <div>
               <span className="stat-card-label">Last Ingest Run</span>
               <strong className="stat-card-value">
@@ -1857,7 +1874,9 @@ function HealthView({
           </div>
 
           <div className="stat-card">
-            <AlertTriangle size={32} color="var(--accent-danger)" />
+            <div className="stat-card-icon stat-card-icon-danger">
+              <AlertTriangle size={20} />
+            </div>
             <div>
               <span className="stat-card-label">Gone Torrents</span>
               <strong className="stat-card-value">{health.goneCount}</strong>
@@ -1865,7 +1884,9 @@ function HealthView({
           </div>
 
           <div className="stat-card">
-            <Database size={32} color="var(--accent-attention)" />
+            <div className="stat-card-icon stat-card-icon-attention">
+              <Database size={20} />
+            </div>
             <div>
               <span className="stat-card-label">Dangling Mappings</span>
               <strong className="stat-card-value">{health.danglingMappings}</strong>
@@ -1873,7 +1894,9 @@ function HealthView({
           </div>
 
           <div className="stat-card">
-            <FileText size={32} color="var(--text-muted)" />
+            <div className="stat-card-icon stat-card-icon-neutral">
+              <FileText size={20} />
+            </div>
             <div>
               <span className="stat-card-label">Files w/o Mount Path</span>
               <strong className="stat-card-value">{health.filesNoMountPath}</strong>
@@ -2008,7 +2031,7 @@ interface FeedViewProps {
 function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library }: FeedViewProps) {
   const [downloadingTopicId, setDownloadingTopicId] = useState<number | null>(null);
 
-  if (isLoading) return <div className="view-body">Loading RuTracker feed...</div>;
+  if (isLoading) return <LoadingState label="Loading RuTracker feed..." />;
 
   return (
     <>
@@ -2018,13 +2041,12 @@ function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library 
 
       <div className="view-body">
         {feed.length === 0 ? (
-          <div style={{ textAlign: 'center', paddingTop: '100px' }}>
-            <Rss size={48} color="var(--text-muted)" style={{ marginBottom: '16px' }} />
-            <h3>No feed matches yet</h3>
-            <p style={{ color: 'var(--text-muted)' }}>
-              Entries matching a show in your Library will show up here after the next ingest run.
-            </p>
-          </div>
+          <EmptyState
+            icon={Rss}
+            iconColor="var(--text-dim)"
+            title="No feed matches yet"
+            description="Entries matching a show in your Library will show up here after the next ingest run."
+          />
         ) : (
           <div className="table-container">
             <table>
@@ -2134,27 +2156,12 @@ function FeedMatchPicker({ library, onSelect, disabled }: FeedMatchPickerProps) 
         style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
       />
       {matches.length > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            backgroundColor: 'var(--bg-surface-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: '6px',
-            maxHeight: '180px',
-            overflowY: 'auto',
-            zIndex: 10,
-            marginTop: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          }}
-        >
+        <div className="dropdown-panel" style={{ maxHeight: '180px' }}>
           {matches.map((title) => (
             <div
               key={title.id}
-              className="hover-highlight"
-              style={{ padding: '6px 10px', fontSize: '12px', cursor: 'pointer' }}
+              className="dropdown-panel-item"
+              style={{ fontSize: '12px' }}
               onClick={() => {
                 onSelect(title.id);
                 setQuery('');
