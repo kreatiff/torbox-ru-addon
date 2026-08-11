@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { build } from '../../src/http/server.js';
 import { config } from '../../src/config.js';
-import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../src/metadata/tmdb.js';
+import {
+  searchTitles,
+  fetchExternalIds,
+  fetchSeasonDetails,
+  resolveTitleIds,
+} from '../../src/metadata/tmdb.js';
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
@@ -10,6 +15,7 @@ vi.mock('../../src/metadata/tmdb.js', () => ({
   searchTitles: vi.fn(),
   fetchExternalIds: vi.fn(),
   fetchSeasonDetails: vi.fn(),
+  resolveTitleIds: vi.fn(),
 }));
 
 vi.mock('../../src/llm/opencodeZen.js', () => ({
@@ -636,6 +642,243 @@ describe.skipIf(!hasTestDb)('GET /api/library (real Postgres)', () => {
     expect(body[0].seasons[0].rules).toEqual([
       { id: rule.rows[0].id, torrentHash: 'h1', numbering: 'sequential', source: 'manual' },
     ]);
+    await app.close();
+  });
+
+  it('includes tvdbId alongside imdbId/tmdbId, for reliable cross-service matching', async () => {
+    await pool.query(
+      `insert into titles (name_ru, imdb_id, tvdb_id, tmdb_id) values ('Show', 'tt1234567', 555, 42)`,
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/library',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body[0]).toMatchObject({ imdbId: 'tt1234567', tvdbId: 555, tmdbId: 42 });
+    await app.close();
+  });
+});
+
+describe.skipIf(!hasTestDb)('GET /api/titles/resolve (real Postgres)', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a request with none of tmdbId/imdbId/tvdbId', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/titles/resolve',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('cross-resolves an imdbId to the other provider ids via TMDB', async () => {
+    vi.mocked(resolveTitleIds).mockResolvedValue({
+      tmdbId: 42,
+      imdbId: 'tt1234567',
+      tvdbId: 555,
+      nameRu: 'Show',
+      nameEn: 'Show EN',
+      year: 2020,
+      posterUrl: null,
+    });
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/titles/resolve?imdbId=tt1234567',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      tmdbId: 42,
+      imdbId: 'tt1234567',
+      tvdbId: 555,
+      nameRu: 'Show',
+      nameEn: 'Show EN',
+      year: 2020,
+      posterUrl: null,
+    });
+    expect(resolveTitleIds).toHaveBeenCalledWith({ tmdbId: null, imdbId: 'tt1234567', tvdbId: null });
+    await app.close();
+  });
+});
+
+describe.skipIf(!hasTestDb)('POST /api/titles (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('manually adds a title without any torrent/rule attached', async () => {
+    vi.mocked(resolveTitleIds).mockResolvedValue({
+      tmdbId: null,
+      imdbId: null,
+      tvdbId: null,
+      nameRu: null,
+      nameEn: null,
+      year: null,
+      posterUrl: null,
+    });
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/titles',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { nameRu: 'Manually Added Show', year: 2021 },
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.success).toBe(true);
+    expect(body.title.nameRu).toBe('Manually Added Show');
+
+    const rows = await pool.query('select name_ru, year from titles');
+    expect(rows.rows).toEqual([{ name_ru: 'Manually Added Show', year: 2021 }]);
+    await app.close();
+  });
+
+  it('backfills imdb/tvdb ids from a manually entered tmdbId', async () => {
+    vi.mocked(resolveTitleIds).mockResolvedValue({
+      tmdbId: 42,
+      imdbId: 'tt1234567',
+      tvdbId: 555,
+      nameRu: 'Show',
+      nameEn: null,
+      year: 2020,
+      posterUrl: null,
+    });
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/titles',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { nameRu: 'Show', tmdbId: 42 },
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.title.imdbId).toBe('tt1234567');
+    expect(body.title.tvdbId).toBe(555);
+    await app.close();
+  });
+
+  it('rejects an empty nameRu with 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/titles',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { nameRu: '' },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('reuses the existing title instead of creating a duplicate when the resolved tmdbId already exists', async () => {
+    const existing = await pool.query(
+      `insert into titles (name_ru, tmdb_id) values ('Existing', 42) returning id`,
+    );
+    vi.mocked(resolveTitleIds).mockResolvedValue({
+      tmdbId: 42,
+      imdbId: 'tt9999999',
+      tvdbId: null,
+      nameRu: 'Existing',
+      nameEn: null,
+      year: null,
+      posterUrl: null,
+    });
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/titles',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { nameRu: 'New name', imdbId: 'tt9999999' },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().title.id).toBe(existing.rows[0].id);
+
+    const count = await pool.query('select count(*) from titles');
+    expect(Number(count.rows[0].count)).toBe(1);
+    await app.close();
+  });
+});
+
+describe.skipIf(!hasTestDb)('PATCH /api/titles/:id (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('updates only the provided fields on an existing title', async () => {
+    const inserted = await pool.query(
+      `insert into titles (name_ru, year) values ('Old Name', 2019) returning id`,
+    );
+    const titleId = inserted.rows[0].id as string;
+
+    const app = build();
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/titles/${titleId}`,
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { imdbId: 'tt1234567' },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.title.imdbId).toBe('tt1234567');
+    expect(body.title.nameRu).toBe('Old Name');
+    expect(body.title.year).toBe(2019);
+    await app.close();
+  });
+
+  it('404s for a missing title id', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/titles/00000000-0000-0000-0000-000000000000',
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { imdbId: 'tt1234567' },
+    });
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('409s when the new imdbId already belongs to a different title', async () => {
+    await pool.query(`insert into titles (name_ru, imdb_id) values ('Other', 'tt1111111')`);
+    const inserted = await pool.query(`insert into titles (name_ru) values ('Mine') returning id`);
+    const titleId = inserted.rows[0].id as string;
+
+    const app = build();
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/titles/${titleId}`,
+      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      payload: { imdbId: 'tt1111111' },
+    });
+    expect(response.statusCode).toBe(409);
     await app.close();
   });
 });

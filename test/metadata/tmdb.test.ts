@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../src/metadata/tmdb.js';
+import {
+  searchTitles,
+  fetchExternalIds,
+  fetchSeasonDetails,
+  findByExternalId,
+  fetchTvDetails,
+  resolveTitleIds,
+} from '../../src/metadata/tmdb.js';
 import { config } from '../../src/config.js';
 
 describe('TMDB Client', () => {
@@ -116,5 +123,153 @@ describe('TMDB Client', () => {
     expect(episodes).toHaveLength(2);
     expect(episodes[0]).toEqual({ episode: 1, air_date: '2024-03-10' });
     expect(episodes[1]).toEqual({ episode: 2, air_date: '2024-03-17' });
+  });
+
+  it('finds the matching TMDB show from an external (imdb/tvdb) id', async () => {
+    const mockResponse = {
+      tv_results: [
+        {
+          id: 101,
+          name: 'Сокровища императора',
+          original_name: 'The Treasures',
+          first_air_date: '2024-03-10',
+          poster_path: '/poster.jpg',
+        },
+      ],
+    };
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => mockResponse });
+    global.fetch = fetchSpy;
+
+    const result = await findByExternalId('imdb_id', 'tt9999');
+    expect(result).toEqual({
+      tmdbId: 101,
+      nameRu: 'Сокровища императора',
+      nameEn: 'The Treasures',
+      year: 2024,
+      posterUrl: 'https://image.tmdb.org/t/p/w500/poster.jpg',
+    });
+    const calledUrl = fetchSpy.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('/find/tt9999');
+    expect(calledUrl).toContain('external_source=imdb_id');
+  });
+
+  it('returns null from findByExternalId when TMDB has no matching show', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tv_results: [] }) });
+    const result = await findByExternalId('tvdb_id', 8888);
+    expect(result).toBeNull();
+  });
+
+  it('fetches basic show details for a TMDB id in hand', async () => {
+    const mockResponse = {
+      id: 101,
+      name: 'Show',
+      original_name: 'Show EN',
+      first_air_date: '2020-01-01',
+      poster_path: '/p.jpg',
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => mockResponse });
+
+    const result = await fetchTvDetails(101);
+    expect(result).toEqual({
+      tmdbId: 101,
+      nameRu: 'Show',
+      nameEn: 'Show EN',
+      year: 2020,
+      posterUrl: 'https://image.tmdb.org/t/p/w500/p.jpg',
+    });
+  });
+
+  describe('resolveTitleIds', () => {
+    it('backfills imdb/tvdb ids and a name preview from a tmdbId alone', async () => {
+      const fetchSpy = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/external_ids')) {
+          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }) });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 101,
+            name: 'Show',
+            original_name: null,
+            first_air_date: '2020-05-01',
+            poster_path: null,
+          }),
+        });
+      });
+      global.fetch = fetchSpy;
+
+      const result = await resolveTitleIds({ tmdbId: 101 });
+      expect(result).toEqual({
+        tmdbId: 101,
+        imdbId: 'tt42',
+        tvdbId: 99,
+        nameRu: 'Show',
+        nameEn: null,
+        year: 2020,
+        posterUrl: null,
+      });
+    });
+
+    it('discovers the tmdbId (and tvdbId) from an imdbId via /find, then backfills the rest', async () => {
+      const fetchSpy = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/find/')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              tv_results: [
+                { id: 101, name: 'Show', original_name: null, first_air_date: null, poster_path: null },
+              ],
+            }),
+          });
+        }
+        if (url.includes('/external_ids')) {
+          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }) });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      global.fetch = fetchSpy;
+
+      const result = await resolveTitleIds({ imdbId: 'tt42' });
+      expect(result.tmdbId).toBe(101);
+      expect(result.tvdbId).toBe(99);
+      expect(result.imdbId).toBe('tt42');
+      expect(result.nameRu).toBe('Show');
+    });
+
+    it('never overwrites an explicitly provided id with a discovered one', async () => {
+      const fetchSpy = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/external_ids')) {
+          // TMDB thinks the tvdbId is different from what the human entered.
+          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt-tmdb', tvdb_id: 777 }) });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ id: 101, name: 'Show', original_name: null, first_air_date: null, poster_path: null }),
+        });
+      });
+      global.fetch = fetchSpy;
+
+      const result = await resolveTitleIds({ tmdbId: 101, imdbId: 'tt-human', tvdbId: 111 });
+      expect(result.imdbId).toBe('tt-human');
+      expect(result.tvdbId).toBe(111);
+    });
+
+    it('returns the given ids as-is without calling TMDB when no api key is configured', async () => {
+      vi.spyOn(config, 'tmdbApiKey', 'get').mockReturnValue(undefined);
+      const fetchSpy = vi.fn();
+      global.fetch = fetchSpy;
+
+      const result = await resolveTitleIds({ imdbId: 'tt42' });
+      expect(result).toEqual({
+        tmdbId: null,
+        imdbId: 'tt42',
+        tvdbId: null,
+        nameRu: null,
+        nameEn: null,
+        year: null,
+        posterUrl: null,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 });

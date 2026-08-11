@@ -4,6 +4,8 @@ import { pool } from '../../../db/pool.js';
 import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
 import {
   findOrCreateTitle,
+  getTitleById,
+  updateTitle,
   listTitlesWithSeasons,
   upsertRule,
   upsertProviderSeason,
@@ -19,7 +21,13 @@ import {
   deleteGoneTorrents,
   listRecentActivity,
 } from '../../../db/repositories/index.js';
-import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
+import { toConflictError } from '../../../db/errors.js';
+import {
+  searchTitles,
+  fetchExternalIds,
+  fetchSeasonDetails,
+  resolveTitleIds,
+} from '../../../metadata/tmdb.js';
 import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
@@ -62,6 +70,30 @@ const saveRuleBodySchema = z.object({
   // below clean up the old row if the edit also changed the season.
   ruleId: z.string().optional(),
   torrentName: z.string().optional(),
+});
+
+// Body for POST /titles and PATCH /titles/:id -- manual Library entry, kept
+// separate from saveRuleBodySchema's nested `title` since it stands alone
+// (no torrent/rule attached) and every field but nameRu is independently
+// optional for a partial edit.
+const createTitleBodySchema = z.object({
+  nameRu: z.string().min(1),
+  nameEn: z.string().optional().nullable(),
+  year: z.number().int().optional().nullable(),
+  posterUrl: z.string().optional().nullable(),
+  tmdbId: z.number().int().optional().nullable(),
+  imdbId: z.string().optional().nullable(),
+  tvdbId: z.number().int().optional().nullable(),
+});
+
+const updateTitleBodySchema = z.object({
+  nameRu: z.string().min(1).optional(),
+  nameEn: z.string().optional().nullable(),
+  year: z.number().int().optional().nullable(),
+  posterUrl: z.string().optional().nullable(),
+  tmdbId: z.number().int().optional().nullable(),
+  imdbId: z.string().optional().nullable(),
+  tvdbId: z.number().int().optional().nullable(),
 });
 
 function escapeHtml(input: string): string {
@@ -307,6 +339,104 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     return results;
   });
 
+  // GET /api/titles/resolve - Reliable multi-service id matching: given any
+  // one of tmdbId/imdbId/tvdbId, cross-reference TMDB to backfill the other
+  // two plus a name/year/poster preview (src/metadata/tmdb.ts's
+  // resolveTitleIds). Read-only/idempotent, nothing is persisted -- the
+  // Library "Add Title" / "Edit IDs" forms call this to let a human preview
+  // and confirm before POST /titles or PATCH /titles/:id actually saves it.
+  app.get('/titles/resolve', async (request, reply) => {
+    const query = request.query as { tmdbId?: string; imdbId?: string; tvdbId?: string };
+    const tmdbId = query.tmdbId ? Number(query.tmdbId) : null;
+    const imdbId = query.imdbId?.trim() || null;
+    const tvdbId = query.tvdbId ? Number(query.tvdbId) : null;
+
+    if (query.tmdbId && (tmdbId === null || isNaN(tmdbId))) {
+      return reply.code(400).send({ error: 'tmdbId must be numeric' });
+    }
+    if (query.tvdbId && (tvdbId === null || isNaN(tvdbId))) {
+      return reply.code(400).send({ error: 'tvdbId must be numeric' });
+    }
+    if (!tmdbId && !imdbId && !tvdbId) {
+      return reply
+        .code(400)
+        .send({ error: 'At least one of tmdbId, imdbId, or tvdbId is required' });
+    }
+
+    const resolved = await resolveTitleIds({ tmdbId, imdbId, tvdbId });
+    return resolved;
+  });
+
+  // POST /api/titles - Manually add a Library title, independent of any
+  // torrent/rule (the existing POST /rules also creates titles, but only as
+  // a side effect of mapping a specific torrent). Backfills whichever
+  // external ids weren't provided via resolveTitleIds, same as /rules does
+  // for tmdbId-only submissions -- so a manual add by IMDb id alone still
+  // ends up with a tmdbId/tvdbId when TMDB has a match.
+  app.post('/titles', async (request, reply) => {
+    const body = createTitleBodySchema.parse(request.body);
+
+    let tmdbId = body.tmdbId ?? null;
+    let imdbId = body.imdbId ?? null;
+    let tvdbId = body.tvdbId ?? null;
+
+    if (tmdbId || imdbId || tvdbId) {
+      try {
+        const resolved = await resolveTitleIds({ tmdbId, imdbId, tvdbId });
+        tmdbId = tmdbId ?? resolved.tmdbId;
+        imdbId = imdbId ?? resolved.imdbId;
+        tvdbId = tvdbId ?? resolved.tvdbId;
+      } catch (err) {
+        app.log.warn({ err, tmdbId, imdbId, tvdbId }, 'Failed to backfill external ids for a manually added title');
+      }
+    }
+
+    try {
+      const title = await findOrCreateTitle({
+        imdbId,
+        tvdbId,
+        tmdbId,
+        nameRu: body.nameRu,
+        nameEn: body.nameEn ?? null,
+        year: body.year ?? null,
+        aliases: [],
+        posterUrl: body.posterUrl ?? null,
+      });
+      return reply.code(201).send({ success: true, title });
+    } catch (err) {
+      const conflict = toConflictError(err);
+      if (conflict) {
+        return reply.code(409).send({ success: false, error: conflict.message });
+      }
+      throw err;
+    }
+  });
+
+  // PATCH /api/titles/:id - Manually edit an existing Library title's
+  // name/year/poster or provider ids -- e.g. correcting a wrong TMDB match,
+  // or filling in an imdb/tvdb id the automatic resolver couldn't find.
+  // Only the fields present in the body are changed.
+  app.patch('/titles/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = updateTitleBodySchema.parse(request.body);
+
+    const existing = await getTitleById(id);
+    if (!existing) {
+      return reply.code(404).send({ success: false, error: 'Title not found' });
+    }
+
+    try {
+      const title = await updateTitle(id, body);
+      return { success: true, title };
+    } catch (err) {
+      const conflict = toConflictError(err);
+      if (conflict) {
+        return reply.code(409).send({ success: false, error: conflict.message });
+      }
+      throw err;
+    }
+  });
+
   // POST /api/rules - Create or update manual rule
   app.post('/rules', async (request, reply) => {
     const body = saveRuleBodySchema.parse(request.body);
@@ -501,6 +631,7 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
           posterUrl: t.posterUrl,
           imdbId: t.imdbId,
           tmdbId: t.tmdbId,
+          tvdbId: t.tvdbId,
           seasons: seasonsWithCoverage,
         };
       }),

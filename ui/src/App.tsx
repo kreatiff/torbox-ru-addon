@@ -26,6 +26,7 @@ import {
   X,
   Box,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 
 // Import the pure expandRule function and types from our backend src. Only
@@ -195,7 +196,51 @@ interface LibraryItem {
   posterUrl: string | null;
   imdbId: string | null;
   tmdbId: number | null;
+  tvdbId: number | null;
   seasons: LibrarySeason[];
+}
+
+// GET /api/titles/resolve -- cross-references TMDB from whichever of
+// tmdbId/imdbId/tvdbId is provided to backfill the other two, plus a
+// name/year/poster preview. Nothing persisted; the Add/Edit Title modal
+// uses this to let a human confirm a match before saving.
+interface ResolvedTitleIds {
+  tmdbId: number | null;
+  imdbId: string | null;
+  tvdbId: number | null;
+  nameRu: string | null;
+  nameEn: string | null;
+  year: number | null;
+  posterUrl: string | null;
+}
+
+// POST /api/titles (create) / PATCH /api/titles/:id (edit) -- manual
+// Library entry, independent of any torrent/rule.
+interface TitleFormBody {
+  nameRu: string;
+  nameEn?: string | null;
+  year?: number | null;
+  posterUrl?: string | null;
+  tmdbId?: number | null;
+  imdbId?: string | null;
+  tvdbId?: number | null;
+}
+
+interface TitleRecord {
+  id: string;
+  nameRu: string;
+  nameEn: string | null;
+  year: number | null;
+  posterUrl: string | null;
+  imdbId: string | null;
+  tmdbId: number | null;
+  tvdbId: number | null;
+}
+
+interface TitleMutationResponse {
+  success: boolean;
+  title: TitleRecord;
+  error?: string;
 }
 
 interface GoneTorrent {
@@ -273,7 +318,18 @@ const queryClient = new QueryClient({
 async function apiFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, options);
   if (!res.ok) {
-    throw new Error(`API error: ${res.statusText} (${res.status})`);
+    // Routes like POST/PATCH /api/titles return a JSON {error: "..."} body
+    // with their non-2xx status (e.g. 409 on a provider-id conflict) --
+    // surface that specific message instead of the generic status text
+    // whenever the body parses as JSON with one.
+    let detail = res.statusText;
+    try {
+      const body = (await res.clone().json()) as { error?: string };
+      if (typeof body.error === 'string') detail = body.error;
+    } catch {
+      // Non-JSON error body -- fall back to statusText above.
+    }
+    throw new Error(`API error: ${detail} (${res.status})`);
   }
   return res.json() as Promise<T>;
 }
@@ -564,6 +620,47 @@ function AdminApp() {
     },
   });
 
+  // Manual Library entry -- add a title with no torrent/rule attached, or
+  // edit an existing one's name/year/poster/provider ids (the Library
+  // view's "Add Title" button and each card's "Edit" action).
+  const [titleModal, setTitleModal] = useState<
+    { mode: 'add' } | { mode: 'edit'; title: TitleRecord } | null
+  >(null);
+
+  const createTitle = useMutation({
+    mutationFn: (body: TitleFormBody) =>
+      apiFetch<TitleMutationResponse>('/api/titles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['library'] });
+      showToast(`Added "${result.title.nameRu}" to the Library.`);
+      setTitleModal(null);
+    },
+    onError: (err) => {
+      showToast(`Failed to add title: ${err.message}`, 'error');
+    },
+  });
+
+  const updateTitleMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: TitleFormBody }) =>
+      apiFetch<TitleMutationResponse>(`/api/titles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['library'] });
+      showToast(`Updated "${result.title.nameRu}".`);
+      setTitleModal(null);
+    },
+    onError: (err) => {
+      showToast(`Failed to update title: ${err.message}`, 'error');
+    },
+  });
+
   const deleteTorrent = useMutation({
     mutationFn: (hash: string) => apiFetch<{ success: boolean }>(`/api/torrents/${hash}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -774,6 +871,8 @@ function AdminApp() {
               setReturnTab('library');
               setActiveTab('labeller');
             }}
+            onAddTitle={() => setTitleModal({ mode: 'add' })}
+            onEditTitle={(title) => setTitleModal({ mode: 'edit', title })}
           />
         )}
 
@@ -799,6 +898,23 @@ function AdminApp() {
           />
         )}
       </div>
+
+      {/* Add/Edit Title modal (Library view) */}
+      {titleModal && (
+        <TitleFormModal
+          mode={titleModal.mode}
+          initial={titleModal.mode === 'edit' ? titleModal.title : null}
+          isSubmitting={createTitle.isPending || updateTitleMutation.isPending}
+          onClose={() => setTitleModal(null)}
+          onSubmit={(body) => {
+            if (titleModal.mode === 'add') {
+              createTitle.mutate(body);
+            } else {
+              updateTitleMutation.mutate({ id: titleModal.title.id, body });
+            }
+          }}
+        />
+      )}
 
       {/* Toasts */}
       <div className="toast-container">
@@ -1666,13 +1782,273 @@ function LabellerView({
   );
 }
 
+// --- ADD/EDIT TITLE MODAL ---
+// Lets a human add a Library title by hand (no torrent/rule required) or
+// correct an existing one's provider ids -- either by picking a TMDB search
+// result, typing any combination of tmdbId/imdbId/tvdbId directly, or a mix
+// of both, with a "Resolve IDs" step to preview TMDB's cross-reference
+// before saving (see GET /api/titles/resolve, src/metadata/tmdb.ts's
+// resolveTitleIds).
+interface TitleFormModalProps {
+  mode: 'add' | 'edit';
+  initial: TitleRecord | null;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (body: TitleFormBody) => void;
+}
+function TitleFormModal({ mode, initial, isSubmitting, onClose, onSubmit }: TitleFormModalProps) {
+  const [nameRu, setNameRu] = useState(initial?.nameRu ?? '');
+  const [nameEn, setNameEn] = useState(initial?.nameEn ?? '');
+  const [year, setYear] = useState(initial?.year != null ? String(initial.year) : '');
+  const [posterUrl, setPosterUrl] = useState(initial?.posterUrl ?? '');
+  const [tmdbId, setTmdbId] = useState(initial?.tmdbId != null ? String(initial.tmdbId) : '');
+  const [imdbId, setImdbId] = useState(initial?.imdbId ?? '');
+  const [tvdbId, setTvdbId] = useState(initial?.tvdbId != null ? String(initial.tvdbId) : '');
+
+  const [searchQuery, setSearchQuery] = useState(initial?.nameRu ?? '');
+  const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
+
+  const triggerSearch = async (query: string) => {
+    if (!query) return;
+    setIsSearching(true);
+    try {
+      const results = await apiFetch<TmdbSearchResult[]>(
+        `/api/titles/search?query=${encodeURIComponent(query)}`,
+      );
+      setSearchResults(results);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const applySearchResult = (show: TmdbSearchResult) => {
+    setNameRu(show.nameRu);
+    setNameEn(show.nameEn ?? '');
+    setYear(show.year != null ? String(show.year) : '');
+    setPosterUrl(show.posterUrl ?? '');
+    setTmdbId(String(show.tmdbId));
+    setSearchResults([]);
+  };
+
+  // Cross-references TMDB from whichever id(s) are currently filled in to
+  // preview/backfill the other two plus name/year/poster -- never
+  // overwrites a field the human already typed something into, only fills
+  // in blanks (matches resolveTitleIds' own "explicit ids always win"
+  // behaviour server-side).
+  const resolveIds = async () => {
+    if (!tmdbId && !imdbId && !tvdbId) {
+      alert('Enter at least one of TMDB / IMDb / TVDB id first.');
+      return;
+    }
+    setIsResolving(true);
+    try {
+      const params = new URLSearchParams();
+      if (tmdbId) params.set('tmdbId', tmdbId);
+      if (imdbId) params.set('imdbId', imdbId);
+      if (tvdbId) params.set('tvdbId', tvdbId);
+      const resolved = await apiFetch<ResolvedTitleIds>(`/api/titles/resolve?${params.toString()}`);
+
+      if (!tmdbId && resolved.tmdbId) setTmdbId(String(resolved.tmdbId));
+      if (!imdbId && resolved.imdbId) setImdbId(resolved.imdbId);
+      if (!tvdbId && resolved.tvdbId) setTvdbId(String(resolved.tvdbId));
+      if (!nameRu && resolved.nameRu) setNameRu(resolved.nameRu);
+      if (!nameEn && resolved.nameEn) setNameEn(resolved.nameEn);
+      if (!year && resolved.year) setYear(String(resolved.year));
+      if (!posterUrl && resolved.posterUrl) setPosterUrl(resolved.posterUrl);
+
+      if (!resolved.tmdbId && !resolved.imdbId && !resolved.tvdbId) {
+        alert('TMDB had no cross-reference for the id(s) given.');
+      }
+    } catch (err) {
+      alert(`Failed to resolve ids: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const handleSubmit = () => {
+    const trimmedNameRu = nameRu.trim();
+    if (!trimmedNameRu) {
+      alert('Name (RU) is required.');
+      return;
+    }
+    onSubmit({
+      nameRu: trimmedNameRu,
+      nameEn: nameEn.trim() || null,
+      year: year ? Number(year) : null,
+      posterUrl: posterUrl.trim() || null,
+      tmdbId: tmdbId ? Number(tmdbId) : null,
+      imdbId: imdbId.trim() || null,
+      tvdbId: tvdbId ? Number(tvdbId) : null,
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{mode === 'add' ? 'Add Title' : `Edit "${initial?.nameRu}"`}</h3>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group" style={{ position: 'relative', marginBottom: 0 }}>
+            <label>Search TMDB (optional)</label>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                type="text"
+                placeholder="Search Cyrillic or English..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && triggerSearch(searchQuery)}
+              />
+              <button className="btn btn-secondary" onClick={() => triggerSearch(searchQuery)}>
+                {isSearching ? (
+                  <RefreshCw className="animate-spin" size={16} />
+                ) : (
+                  <Search size={16} />
+                )}
+              </button>
+            </div>
+            {searchResults.length > 0 && (
+              <div className="dropdown-panel">
+                {searchResults.map((show) => (
+                  <div
+                    key={show.tmdbId}
+                    className="dropdown-panel-item"
+                    onClick={() => applySearchResult(show)}
+                  >
+                    {show.posterUrl ? (
+                      <img
+                        src={show.posterUrl}
+                        alt=""
+                        style={{ width: '30px', height: '45px', objectFit: 'cover', borderRadius: '4px' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: '30px',
+                          height: '45px',
+                          backgroundColor: 'var(--bg-main)',
+                          borderRadius: '4px',
+                        }}
+                      />
+                    )}
+                    <div>
+                      <div>{show.nameRu}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                        {show.nameEn} {show.year ? `(${show.year})` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label>Name (RU) *</label>
+            <input type="text" value={nameRu} onChange={(e) => setNameRu(e.target.value)} />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Name (EN)</label>
+              <input type="text" value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label>Year</label>
+              <input
+                type="number"
+                value={year}
+                onChange={(e) => setYear(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Poster URL</label>
+            <input type="text" value={posterUrl} onChange={(e) => setPosterUrl(e.target.value)} />
+          </div>
+
+          <div className="form-row" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+            <div className="form-group">
+              <label>TMDB ID</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={tmdbId}
+                onChange={(e) => setTmdbId(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>IMDb ID</label>
+              <input
+                type="text"
+                placeholder="tt1234567"
+                value={imdbId}
+                onChange={(e) => setImdbId(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>TVDB ID</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={tvdbId}
+                onChange={(e) => setTvdbId(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div>
+            <button
+              className="btn btn-secondary"
+              onClick={resolveIds}
+              disabled={isResolving}
+              style={{ width: '100%' }}
+            >
+              {isResolving ? (
+                <>
+                  <RefreshCw className="animate-spin" size={14} /> Resolving…
+                </>
+              ) : (
+                'Resolve IDs from TMDB'
+              )}
+            </button>
+            <span className="form-hint">
+              Fills in any blank TMDB/IMDb/TVDB id (and name/year/poster) from whichever id(s) above
+              are already set -- never overwrites something you've typed in.
+            </span>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={isSubmitting}>
+            {isSubmitting ? 'Saving...' : mode === 'add' ? 'Add Title' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- LIBRARY VIEW ---
 interface LibraryViewProps {
   library: LibraryItem[];
   isLoading: boolean;
   onEditRule: (torrentHash: string, ruleId: string) => void;
+  onAddTitle: () => void;
+  onEditTitle: (title: TitleRecord) => void;
 }
-function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
+function LibraryView({ library, isLoading, onEditRule, onAddTitle, onEditTitle }: LibraryViewProps) {
   const [filter, setFilter] = useState('');
 
   if (isLoading) return <LoadingState label="Loading library grid..." />;
@@ -1691,20 +2067,25 @@ function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
     <>
       <div className="view-header">
         <h2>Seeded & Mapped Library</h2>
-        <div style={{ position: 'relative' }}>
-          <Search
-            size={14}
-            color="var(--text-dim)"
-            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }}
-          />
-          <input
-            type="text"
-            placeholder="Filter by show name..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="filter-input"
-            style={{ paddingLeft: '28px' }}
-          />
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ position: 'relative' }}>
+            <Search
+              size={14}
+              color="var(--text-dim)"
+              style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <input
+              type="text"
+              placeholder="Filter by show name..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="filter-input"
+              style={{ paddingLeft: '28px' }}
+            />
+          </div>
+          <button className="btn btn-primary" onClick={onAddTitle}>
+            Add Title
+          </button>
         </div>
       </div>
       <div className="view-body">
@@ -1713,7 +2094,7 @@ function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
             icon={FolderOpen}
             iconColor="var(--text-dim)"
             title="Library is empty"
-            description="Shows will appear here once torrents in the Queue are mapped."
+            description='Shows will appear here once torrents in the Queue are mapped, or click "Add Title" above to add one by hand.'
           />
         ) : filteredLibrary.length === 0 ? (
           <p className="panel-empty">No shows match "{filter}".</p>
@@ -1737,16 +2118,52 @@ function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
                     <FolderOpen size={24} color="var(--text-dim)" />
                   </div>
                 )}
-                <div className="library-card-title-info">
+                <div className="library-card-title-info" style={{ flex: 1, minWidth: 0 }}>
                   <h3>{show.nameRu}</h3>
                   <span style={{ display: 'block' }}>{show.nameEn}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-                    {show.year ?? 'N/A'} •{' '}
-                    {show.imdbId || show.tmdbId
-                      ? show.imdbId || `tmdb:${show.tmdbId}`
-                      : 'No Provider ID'}
-                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{show.year ?? 'N/A'}</span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+                    {show.imdbId ? (
+                      <span className="badge neutral" style={{ fontSize: '10px' }}>
+                        imdb:{show.imdbId}
+                      </span>
+                    ) : null}
+                    {show.tmdbId ? (
+                      <span className="badge neutral" style={{ fontSize: '10px' }}>
+                        tmdb:{show.tmdbId}
+                      </span>
+                    ) : null}
+                    {show.tvdbId ? (
+                      <span className="badge neutral" style={{ fontSize: '10px' }}>
+                        tvdb:{show.tvdbId}
+                      </span>
+                    ) : null}
+                    {!show.imdbId && !show.tmdbId && !show.tvdbId ? (
+                      <span className="badge attention" style={{ fontSize: '10px' }}>
+                        No Provider ID
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
+                <button
+                  className="icon-btn icon-btn-neutral"
+                  style={{ alignSelf: 'flex-start' }}
+                  title="Edit name/year/poster and provider ids"
+                  onClick={() =>
+                    onEditTitle({
+                      id: show.id,
+                      nameRu: show.nameRu,
+                      nameEn: show.nameEn,
+                      year: show.year,
+                      posterUrl: show.posterUrl,
+                      imdbId: show.imdbId,
+                      tmdbId: show.tmdbId,
+                      tvdbId: show.tvdbId,
+                    })
+                  }
+                >
+                  <Pencil size={14} />
+                </button>
               </div>
 
               <div className="library-card-seasons">

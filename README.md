@@ -262,6 +262,18 @@ sort, exceptions, and show — change anything and save to update it in place
 (or move it to a different season; the old rule and its mappings are cleaned
 up automatically rather than left behind).
 
+Titles carry `tmdb_id`/`imdb_id`/`tvdb_id` together, not just one provider id,
+so matching against RuTracker feed entries and AIOStreams/Stremio requests
+stays reliable even when a show is missing one of the three. Whenever a
+title is created or edited with at least one id, the server cross-references
+TMDB (`GET /api/titles/resolve`) to backfill whichever of the other two it
+can find — pick a TMDB show from search and its IMDb/TVDB ids get filled in
+automatically; paste just an IMDb or TVDB id and TMDB resolves the rest. The
+Library tab's **Add Title** button (and each card's **Edit** action) exposes
+this directly: search TMDB, or type any combination of the three ids and
+name/year/poster by hand, click **Resolve IDs** to preview what TMDB
+cross-references before saving, then save either way.
+
 In the Library tab's episode-coverage grid, a green box means exactly one
 file is mapped to that episode; orange means more than one file mapped to
 the same episode number (hover for a tooltip listing which files — this can
