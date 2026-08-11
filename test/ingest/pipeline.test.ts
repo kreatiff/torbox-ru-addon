@@ -6,9 +6,15 @@ import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
 import { runIngest } from '../../src/ingest/pipeline.js';
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
+import { notifyDiscordEpisodesProcessed } from '../../src/notify/discord.js';
 
 vi.mock('../../src/llm/opencodeZen.js', () => ({
   extractEpisodes: vi.fn(),
+}));
+
+vi.mock('../../src/notify/discord.js', () => ({
+  notifyDiscordNewMatches: vi.fn(),
+  notifyDiscordEpisodesProcessed: vi.fn(),
 }));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +72,7 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     // unruled torrents simply queue for manual review unless a test opts in
     // with its own mockImplementation/mockResolvedValueOnce below.
     vi.mocked(extractEpisodes).mockReset().mockResolvedValue(null);
+    vi.mocked(notifyDiscordEpisodesProcessed).mockReset();
   });
 
   afterEach(() => {
@@ -256,6 +263,14 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
        where r.torrent_hash = 'hash-f' order by m.episode`,
     );
     expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }]);
+
+    // Every auto-committed proposal gets one Discord "processed" entry per
+    // (title, season) -- regardless of what triggered this run (scheduler,
+    // admin UI button, or the TorBox webhook).
+    expect(notifyDiscordEpisodesProcessed).toHaveBeenCalledTimes(1);
+    expect(notifyDiscordEpisodesProcessed).toHaveBeenCalledWith([
+      { titleName: 'Clean Show', season: 1, episodes: [1, 2] },
+    ]);
   });
 
   it('does not materialise mappings for an auto-proposed rule when the LLM reports itself not confident, even though the title matches an existing show', async () => {
@@ -303,6 +318,10 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
        where r.torrent_hash = 'hash-g'`,
     );
     expect(mappings.rows).toEqual([]);
+
+    // Queued (not yet human-approved) proposals aren't "processed and added
+    // to the library" -- no Discord notification for them.
+    expect(notifyDiscordEpisodesProcessed).not.toHaveBeenCalled();
   });
 
   it('regression: resolves a title even when the torrent name has a site-tag prefix and a hard-to-regex "X из Y" phrase order', async () => {

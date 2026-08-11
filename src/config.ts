@@ -57,6 +57,12 @@ const envSchema = z.object({
   // Defaults on (15 min) since a scheduler is the whole point of this
   // setting -- an operator who wants manual-only sets this to 0 explicitly.
   INGEST_INTERVAL_MINUTES: z.coerce.number().int().nonnegative().default(15),
+  // --- Inbound TorBox webhook (src/http/routes/webhooks) ---------------
+  // Shared secret in the webhook URL path (/webhooks/torbox/:token), same
+  // convention as ADDON_TOKEN. Optional: unset disables the route entirely
+  // (every request 404s) rather than being reachable with an empty token.
+  // Generate one with: openssl rand -hex 32
+  TORBOX_WEBHOOK_TOKEN: z.string().optional(),
 });
 
 function loadConfig() {
@@ -94,6 +100,7 @@ function loadConfig() {
     flaresolverrUrl: parsed.data.FLARESOLVERR_URL,
     discordWebhookUrl: parsed.data.DISCORD_WEBHOOK_URL,
     ingestIntervalMinutes: parsed.data.INGEST_INTERVAL_MINUTES,
+    torboxWebhookToken: parsed.data.TORBOX_WEBHOOK_TOKEN,
   };
 }
 

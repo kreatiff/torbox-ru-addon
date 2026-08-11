@@ -13,7 +13,11 @@ import {
   listUnnotifiedEntries,
   markNotified,
 } from '../db/repositories/feedEntriesRepo.js';
-import { notifyDiscordNewMatches } from '../notify/discord.js';
+import {
+  notifyDiscordNewMatches,
+  notifyDiscordEpisodesProcessed,
+  type ProcessedEpisodeNotification,
+} from '../notify/discord.js';
 import { proposeRule } from '../resolve/proposeRule.js';
 import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
@@ -330,6 +334,11 @@ export async function runIngest(): Promise<IngestSummary> {
   let proposalsCreated = 0;
   let proposalsAutoCommitted = 0;
   let proposalsQueued = 0;
+  // Populated only for auto-committed (tier: 'commit') proposals -- a
+  // queued one isn't "processed and added to the library" yet, it's just
+  // sitting in the Queue awaiting a human. Notified once, after the whole
+  // batch finishes, same batching style as pollFeed's Discord notification.
+  const processedForNotification: ProcessedEpisodeNotification[] = [];
 
   await throttledMap(
     unruled,
@@ -368,8 +377,20 @@ export async function runIngest(): Promise<IngestSummary> {
         // human accepts it. See docs/decisions.md.
         if (tier === 'commit') {
           try {
-            await rebuildMappingsForRule(saved.id);
+            const mappings = await rebuildMappingsForRule(saved.id);
             proposalsAutoCommitted++;
+
+            const titleName =
+              resolution?.title.nameRu ?? proposal.torrentName ?? torrent.rawNameAtIngest;
+            const episodesBySeason = new Map<number, Set<number>>();
+            for (const m of mappings) {
+              const episodes = episodesBySeason.get(m.season) ?? new Set<number>();
+              episodes.add(m.episode);
+              episodesBySeason.set(m.season, episodes);
+            }
+            for (const [season, episodes] of episodesBySeason) {
+              processedForNotification.push({ titleName, season, episodes: [...episodes] });
+            }
           } catch (err) {
             logger.warn({ err, hash: torrent.hash }, 'auto-proposed rule accepted but rebuild failed');
             proposalsQueued++;
@@ -385,6 +406,10 @@ export async function runIngest(): Promise<IngestSummary> {
   );
   if (proposalsCreated > 0) {
     logger.info({ proposalsCreated, proposalsAutoCommitted, proposalsQueued }, 'auto-proposals processed');
+  }
+
+  if (processedForNotification.length > 0) {
+    await notifyDiscordEpisodesProcessed(processedForNotification);
   }
 
   const { rulesProcessed: rulesRebuilt, rulesFailed } = await rebuildAllMappings();
@@ -409,4 +434,28 @@ export async function runIngest(): Promise<IngestSummary> {
   };
   logger.info(summary, 'ingest run complete');
   return summary;
+}
+
+let ingestInFlight: Promise<IngestSummary> | null = null;
+
+/**
+ * Coalescing wrapper around runIngest() for triggers that might fire in a
+ * burst -- specifically the TorBox webhook (src/http/routes/webhooks): a
+ * service can send several notifications ("download started", "download
+ * finished") within moments of each other, and each one calls this. A
+ * second call while a run is already in flight just returns that run's
+ * promise instead of starting a concurrent one; runIngest() isn't designed
+ * to be re-entrant (see startIngestScheduler's own `running` guard, in
+ * ./scheduler.ts, for the same reasoning on the scheduler's side -- that
+ * guard is separate from this one since the scheduler and the webhook are
+ * independent trigger sources).
+ */
+export function runIngestDeduped(): Promise<IngestSummary> {
+  if (ingestInFlight) {
+    return ingestInFlight;
+  }
+  ingestInFlight = runIngest().finally(() => {
+    ingestInFlight = null;
+  });
+  return ingestInFlight;
 }
