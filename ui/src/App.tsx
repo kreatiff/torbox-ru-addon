@@ -22,6 +22,10 @@ import {
   Rss,
   Download,
   ExternalLink,
+  Trash2,
+  X,
+  Box,
+  Loader2,
 } from 'lucide-react';
 
 // Import the pure expandRule function and types from our backend src. Only
@@ -360,11 +364,88 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// Shared centered loading indicator, used in place of a plain "Loading..."
+// text node everywhere a view is waiting on its primary query.
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="view-body">
+      <div className="state-message">
+        <Loader2 size={24} className="spin" color="var(--text-dim)" />
+        <p style={{ marginTop: '8px' }}>{label}</p>
+      </div>
+    </div>
+  );
+}
+
+// Shared centered empty state (icon + heading + description), used by any
+// view whose primary list can legitimately be empty.
+function EmptyState({
+  icon: Icon,
+  iconColor,
+  title,
+  description,
+}: {
+  icon: React.ComponentType<{ size?: number; color?: string }>;
+  iconColor: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="state-message">
+      <div className="state-message-icon" style={{ backgroundColor: `color-mix(in srgb, ${iconColor} 12%, transparent)` }}>
+        <Icon size={28} color={iconColor} />
+      </div>
+      <h3>{title}</h3>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+type TabId = 'queue' | 'labeller' | 'library' | 'health' | 'feed';
+const VALID_TABS: TabId[] = ['queue', 'labeller', 'library', 'health', 'feed'];
+
+// Reads the initial tab from ?tab=... so a refresh/bookmark keeps you where
+// you were. 'labeller' is deliberately excluded here -- it depends on
+// selectedTorrentHash, which isn't itself URL-synced (deep-linking is a
+// separate, larger change), so a stale ?tab=labeller would land on an empty
+// "select a torrent" view. Falls back to 'queue' in that case.
+function getInitialTab(): TabId {
+  const param = new URLSearchParams(window.location.search).get('tab');
+  if (param && param !== 'labeller' && VALID_TABS.includes(param as TabId)) {
+    return param as TabId;
+  }
+  return 'queue';
+}
+
+interface ToastMessage {
+  id: number;
+  message: string;
+  variant: 'success' | 'error';
+}
+
 function AdminApp() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'queue' | 'labeller' | 'library' | 'health' | 'feed'>(
-    'queue',
-  );
+  const [activeTab, setActiveTab] = useState<TabId>(getInitialTab);
+
+  // Keeps the URL's ?tab= param in sync with the active tab (replaceState,
+  // not pushState, so tab switches don't spam browser history).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') !== activeTab) {
+      params.set('tab', activeTab);
+      window.history.replaceState(null, '', `?${params.toString()}`);
+    }
+  }, [activeTab]);
+
+  // Lightweight toast notifications, replacing alert() for non-destructive
+  // mutation results. Destructive actions still use window.confirm() before
+  // firing -- toasts are for after-the-fact notice, not confirmation.
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const showToast = (message: string, variant: ToastMessage['variant'] = 'success') => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, variant }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  };
 
   // Navigation index for queue
   const [selectedQueueIdx, setSelectedQueueIdx] = useState<number>(0);
@@ -412,11 +493,11 @@ function AdminApp() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['feed'] });
       if (!result.success) {
-        alert(`Download failed: ${result.error ?? 'unknown error'}`);
+        showToast(`Download failed: ${result.error ?? 'unknown error'}`, 'error');
       }
     },
     onError: (err) => {
-      alert(`Download failed: ${err.message}`);
+      showToast(`Download failed: ${err.message}`, 'error');
     },
   });
 
@@ -430,11 +511,11 @@ function AdminApp() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['feed'] });
       if (!result.success) {
-        alert(`Match failed: ${result.error ?? 'unknown error'}`);
+        showToast(`Match failed: ${result.error ?? 'unknown error'}`, 'error');
       }
     },
     onError: (err) => {
-      alert(`Match failed: ${err.message}`);
+      showToast(`Match failed: ${err.message}`, 'error');
     },
   });
 
@@ -443,7 +524,10 @@ function AdminApp() {
     mutationFn: () => apiFetch<IngestRunResult>('/api/ingest/run', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['health'] });
-      alert('Ingest run successfully triggered in the background.');
+      showToast('Ingest run triggered in the background.');
+    },
+    onError: (err) => {
+      showToast(`Failed to trigger ingest: ${err.message}`, 'error');
     },
   });
 
@@ -463,7 +547,32 @@ function AdminApp() {
       setActiveTab(returnTab);
     },
     onError: (err) => {
-      alert(`Failed to save rule: ${err.message}`);
+      showToast(`Failed to save rule: ${err.message}`, 'error');
+    },
+  });
+
+  const deleteTorrent = useMutation({
+    mutationFn: (hash: string) => apiFetch<{ success: boolean }>(`/api/torrents/${hash}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['health'] });
+      showToast('Torrent deleted.');
+    },
+    onError: (err) => {
+      showToast(`Delete failed: ${err.message}`, 'error');
+    },
+  });
+
+  const purgeGoneTorrents = useMutation({
+    mutationFn: () =>
+      apiFetch<{ success: boolean; deletedCount: number }>('/api/torrents/purge-gone', {
+        method: 'POST',
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['health'] });
+      showToast(`Deleted ${result.deletedCount} gone torrent${result.deletedCount === 1 ? '' : 's'}.`);
+    },
+    onError: (err) => {
+      showToast(`Purge failed: ${err.message}`, 'error');
     },
   });
 
@@ -530,8 +639,13 @@ function AdminApp() {
       {/* Sidebar */}
       <div className="sidebar">
         <div className="sidebar-header">
-          <h1>TorBox RU Addon</h1>
-          <span>Self-hosted Russian TV Mapper</span>
+          <div className="sidebar-brand-mark">
+            <Box size={16} />
+          </div>
+          <div className="sidebar-header-text">
+            <h1>TorBox RU Addon</h1>
+            <span>Self-hosted Russian TV Mapper</span>
+          </div>
         </div>
 
         <div className="sidebar-menu">
@@ -553,7 +667,7 @@ function AdminApp() {
               if (selectedTorrentHash) {
                 setActiveTab('labeller');
               } else {
-                alert('Please select a torrent from the Queue first.');
+                showToast('Please select a torrent from the Queue first.', 'error');
               }
             }}
           >
@@ -616,6 +730,8 @@ function AdminApp() {
               setReturnTab('queue');
               setActiveTab('labeller');
             }}
+            triggerIngest={triggerIngest}
+            lastIngestRun={health?.lastIngestRun ?? null}
           />
         )}
 
@@ -649,7 +765,13 @@ function AdminApp() {
         )}
 
         {activeTab === 'health' && (
-          <HealthView health={health} isLoading={isHealthLoading} triggerIngest={triggerIngest} />
+          <HealthView
+            health={health}
+            isLoading={isHealthLoading}
+            triggerIngest={triggerIngest}
+            deleteTorrent={deleteTorrent}
+            purgeGoneTorrents={purgeGoneTorrents}
+          />
         )}
 
         {activeTab === 'feed' && (
@@ -662,6 +784,27 @@ function AdminApp() {
           />
         )}
       </div>
+
+      {/* Toasts */}
+      <div className="toast-container">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.variant}`}>
+            {t.variant === 'success' ? (
+              <CheckCircle size={16} color="var(--accent-success)" />
+            ) : (
+              <AlertTriangle size={16} color="var(--accent-danger)" />
+            )}
+            <span style={{ flex: 1 }}>{t.message}</span>
+            <button
+              className="icon-btn"
+              style={{ border: 'none', background: 'transparent', padding: 2 }}
+              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -673,94 +816,173 @@ interface QueueViewProps {
   selectedIdx: number;
   setSelectedIdx: (idx: number) => void;
   onSelect: (hash: string) => void;
+  triggerIngest: UseMutationResult<IngestRunResult, Error, void>;
+  lastIngestRun: string | null;
 }
-function QueueView({ queue, isLoading, selectedIdx, setSelectedIdx, onSelect }: QueueViewProps) {
-  if (isLoading) return <div className="view-body">Loading queue...</div>;
+function QueueView({
+  queue,
+  isLoading,
+  selectedIdx,
+  setSelectedIdx,
+  onSelect,
+  triggerIngest,
+  lastIngestRun,
+}: QueueViewProps) {
+  const [filter, setFilter] = useState('');
+
+  // Filter while preserving each item's index into the full `queue` array,
+  // so selectedIdx (driven by AdminApp's j/k keyboard nav over the
+  // unfiltered list) still points at the right row.
+  const normalisedFilter = filter.trim().toLowerCase();
+  const filteredQueue =
+    normalisedFilter.length === 0
+      ? queue.map((item, idx) => ({ item, idx }))
+      : queue
+          .map((item, idx) => ({ item, idx }))
+          .filter(({ item }) => item.rawNameAtIngest.toLowerCase().includes(normalisedFilter));
+
+  const header = (
+    <div className="view-header">
+      <h2>Ingested Review Queue</h2>
+      <div className="view-header-actions">
+        <div style={{ position: 'relative' }}>
+          <Search
+            size={14}
+            color="var(--text-dim)"
+            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }}
+          />
+          <input
+            type="text"
+            placeholder="Filter by name..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="filter-input"
+            style={{ paddingLeft: '28px' }}
+          />
+        </div>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open, <kbd>a</kbd> to
+          quick-approve
+        </span>
+        <div className="view-header-meta">
+          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+            {lastIngestRun
+              ? `Last run: ${new Date(lastIngestRun).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : 'Never ingested'}
+          </span>
+        </div>
+        <button
+          className="btn btn-primary"
+          onClick={() => triggerIngest.mutate()}
+          disabled={triggerIngest.isPending}
+        >
+          {triggerIngest.isPending ? 'Ingesting...' : 'Trigger Ingest Run Now'}
+        </button>
+      </div>
+    </div>
+  );
+
+  if (isLoading) {
+    return (
+      <>
+        {header}
+        <LoadingState label="Loading queue..." />
+      </>
+    );
+  }
+
   if (queue.length === 0) {
     return (
-      <div className="view-body" style={{ textAlign: 'center', paddingTop: '100px' }}>
-        <CheckCircle size={48} color="var(--accent-success)" style={{ marginBottom: '16px' }} />
-        <h3>All caught up!</h3>
-        <p style={{ color: 'var(--text-muted)' }}>There are no active torrents awaiting review.</p>
-      </div>
+      <>
+        {header}
+        <div className="view-body">
+          <EmptyState
+            icon={CheckCircle}
+            iconColor="var(--accent-success)"
+            title="All caught up!"
+            description="There are no active torrents awaiting review."
+          />
+        </div>
+      </>
     );
   }
 
   return (
     <>
-      <div className="view-header">
-        <h2>Ingested Review Queue</h2>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open, <kbd>a</kbd> to
-          quick-approve
-        </span>
-      </div>
+      {header}
       <div className="view-body">
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Torrent Name</th>
-                <th style={{ width: '80px', textAlign: 'center' }}>Files</th>
-                <th>Proposed Show Mapping</th>
-                <th style={{ width: '80px', textAlign: 'center' }}>Season</th>
-                <th style={{ width: '80px', textAlign: 'center' }}>Conf.</th>
-                <th style={{ width: '60px' }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {queue.map((item, idx) => (
-                <tr
-                  key={item.hash}
-                  className={`${idx === selectedIdx ? 'selected navigating' : ''}`}
-                  onClick={() => setSelectedIdx(idx)}
-                  onDoubleClick={() => onSelect(item.hash)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <td
-                    className="mono"
-                    style={{
-                      maxWidth: '400px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
+        {filteredQueue.length === 0 ? (
+          <p className="panel-empty">No torrents match "{filter}".</p>
+        ) : (
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Torrent Name</th>
+                  <th className="col-narrow col-center">Files</th>
+                  <th>Proposed Show Mapping</th>
+                  <th className="col-narrow col-center">Season</th>
+                  <th className="col-narrow col-center">Conf.</th>
+                  <th style={{ width: '60px' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredQueue.map(({ item, idx }) => (
+                  <tr
+                    key={item.hash}
+                    className={`${idx === selectedIdx ? 'selected navigating' : ''}`}
+                    onClick={() => setSelectedIdx(idx)}
+                    onDoubleClick={() => onSelect(item.hash)}
+                    style={{ cursor: 'pointer' }}
                   >
-                    {highlightHomoglyphs(item.rawNameAtIngest)}
-                  </td>
-                  <td style={{ textAlign: 'center' }}>{item.fileCount}</td>
-                  <td>{item.proposal?.proposedTitle || '-'}</td>
-                  <td style={{ textAlign: 'center' }}>{item.proposal?.proposedSeason ?? '-'}</td>
-                  <td style={{ textAlign: 'center' }}>
-                    <span
-                      className={`badge ${
-                        item.proposal?.confidence >= 0.8
-                          ? 'success'
-                          : item.proposal?.confidence >= 0.4
-                            ? 'attention'
-                            : 'danger'
-                      }`}
-                    >
-                      {(item.proposal?.confidence * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelect(item.hash);
+                    <td
+                      className="mono"
+                      style={{
+                        maxWidth: '400px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      Open
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                      {highlightHomoglyphs(item.rawNameAtIngest)}
+                    </td>
+                    <td className="col-center">{item.fileCount}</td>
+                    <td>{item.proposal?.proposedTitle || '-'}</td>
+                    <td className="col-center">{item.proposal?.proposedSeason ?? '-'}</td>
+                    <td className="col-center">
+                      <span
+                        className={`badge ${
+                          item.proposal?.confidence >= 0.8
+                            ? 'success'
+                            : item.proposal?.confidence >= 0.4
+                              ? 'attention'
+                              : 'danger'
+                        }`}
+                      >
+                        {(item.proposal?.confidence * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelect(item.hash);
+                        }}
+                      >
+                        Open
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </>
   );
@@ -864,7 +1086,7 @@ function LabellerView({
     }
   };
 
-  if (isLoading || !details) return <div className="view-body">Loading files details...</div>;
+  if (isLoading || !details) return <LoadingState label="Loading files details..." />;
 
   const editingRule = initialRuleId ? details.rules.find((r) => r.id === initialRuleId) : undefined;
 
@@ -1170,32 +1392,11 @@ function LabellerView({
 
                 {/* Show Search Autocomplete Drawer */}
                 {searchResults.length > 0 && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      backgroundColor: 'var(--bg-surface-elevated)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      maxHeight: '200px',
-                      overflowY: 'auto',
-                      zIndex: 10,
-                      marginTop: '4px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                    }}
-                  >
+                  <div className="dropdown-panel">
                     {searchResults.map((show) => (
                       <div
                         key={show.tmdbId}
-                        style={{
-                          display: 'flex',
-                          gap: '12px',
-                          padding: '8px 12px',
-                          borderBottom: '1px solid var(--border)',
-                          cursor: 'pointer',
-                        }}
+                        className="dropdown-panel-item"
                         onClick={() => {
                           // A fresh pick from search, never a stale
                           // titleId from whatever was previously selected
@@ -1211,7 +1412,6 @@ function LabellerView({
                           });
                           setSearchResults([]);
                         }}
-                        className="hover-highlight"
                       >
                         {show.posterUrl ? (
                           <img
@@ -1221,7 +1421,7 @@ function LabellerView({
                               width: '30px',
                               height: '45px',
                               objectFit: 'cover',
-                              borderRadius: '2px',
+                              borderRadius: '4px',
                             }}
                           />
                         ) : (
@@ -1230,7 +1430,7 @@ function LabellerView({
                               width: '30px',
                               height: '45px',
                               backgroundColor: 'var(--bg-main)',
-                              borderRadius: '2px',
+                              borderRadius: '4px',
                             }}
                           />
                         )}
@@ -1248,16 +1448,7 @@ function LabellerView({
 
               {/* Show selected metadata card */}
               {selectedShow && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    padding: '12px',
-                    backgroundColor: 'var(--bg-surface-elevated)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '6px',
-                  }}
-                >
+                <div className="meta-card">
                   {selectedShow.posterUrl && (
                     <img
                       src={selectedShow.posterUrl}
@@ -1467,16 +1658,53 @@ interface LibraryViewProps {
   onEditRule: (torrentHash: string, ruleId: string) => void;
 }
 function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
-  if (isLoading) return <div className="view-body">Loading library grid...</div>;
+  const [filter, setFilter] = useState('');
+
+  if (isLoading) return <LoadingState label="Loading library grid..." />;
+
+  const normalisedFilter = filter.trim().toLowerCase();
+  const filteredLibrary =
+    normalisedFilter.length === 0
+      ? library
+      : library.filter(
+          (show) =>
+            show.nameRu.toLowerCase().includes(normalisedFilter) ||
+            show.nameEn?.toLowerCase().includes(normalisedFilter),
+        );
 
   return (
     <>
       <div className="view-header">
         <h2>Seeded & Mapped Library</h2>
+        <div style={{ position: 'relative' }}>
+          <Search
+            size={14}
+            color="var(--text-dim)"
+            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }}
+          />
+          <input
+            type="text"
+            placeholder="Filter by show name..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="filter-input"
+            style={{ paddingLeft: '28px' }}
+          />
+        </div>
       </div>
       <div className="view-body">
+        {library.length === 0 ? (
+          <EmptyState
+            icon={FolderOpen}
+            iconColor="var(--text-dim)"
+            title="Library is empty"
+            description="Shows will appear here once torrents in the Queue are mapped."
+          />
+        ) : filteredLibrary.length === 0 ? (
+          <p className="panel-empty">No shows match "{filter}".</p>
+        ) : (
         <div className="library-grid">
-          {library.map((show) => (
+          {filteredLibrary.map((show) => (
             <div key={show.id} className="library-card">
               <div className="library-card-header">
                 {show.posterUrl ? (
@@ -1589,6 +1817,7 @@ function LibraryView({ library, isLoading, onEditRule }: LibraryViewProps) {
             </div>
           ))}
         </div>
+        )}
       </div>
     </>
   );
@@ -1599,9 +1828,17 @@ interface HealthViewProps {
   health: HealthData | undefined;
   isLoading: boolean;
   triggerIngest: UseMutationResult<IngestRunResult, Error, void>;
+  deleteTorrent: UseMutationResult<{ success: boolean }, Error, string>;
+  purgeGoneTorrents: UseMutationResult<{ success: boolean; deletedCount: number }, Error, void>;
 }
-function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
-  if (isLoading || !health) return <div className="view-body">Loading health statistics...</div>;
+function HealthView({
+  health,
+  isLoading,
+  triggerIngest,
+  deleteTorrent,
+  purgeGoneTorrents,
+}: HealthViewProps) {
+  if (isLoading || !health) return <LoadingState label="Loading health statistics..." />;
 
   return (
     <>
@@ -1619,22 +1856,13 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
       <div className="view-body" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {/* Row of stats cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-          <div
-            style={{
-              backgroundColor: 'var(--bg-surface)',
-              padding: '16px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              gap: '16px',
-            }}
-          >
-            <Clock size={32} color="var(--accent-info)" />
+          <div className="stat-card">
+            <div className="stat-card-icon stat-card-icon-info">
+              <Clock size={20} />
+            </div>
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
-                Last Ingest Run
-              </span>
-              <strong style={{ fontSize: '16px' }}>
+              <span className="stat-card-label">Last Ingest Run</span>
+              <strong className="stat-card-value">
                 {health.lastIngestRun
                   ? new Date(health.lastIngestRun).toLocaleTimeString([], {
                       hour: '2-digit',
@@ -1645,60 +1873,33 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: 'var(--bg-surface)',
-              padding: '16px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              gap: '16px',
-            }}
-          >
-            <AlertTriangle size={32} color="var(--accent-danger)" />
+          <div className="stat-card">
+            <div className="stat-card-icon stat-card-icon-danger">
+              <AlertTriangle size={20} />
+            </div>
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
-                Gone Torrents
-              </span>
-              <strong style={{ fontSize: '16px' }}>{health.goneCount}</strong>
+              <span className="stat-card-label">Gone Torrents</span>
+              <strong className="stat-card-value">{health.goneCount}</strong>
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: 'var(--bg-surface)',
-              padding: '16px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              gap: '16px',
-            }}
-          >
-            <Database size={32} color="var(--accent-attention)" />
+          <div className="stat-card">
+            <div className="stat-card-icon stat-card-icon-attention">
+              <Database size={20} />
+            </div>
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
-                Dangling Mappings
-              </span>
-              <strong style={{ fontSize: '16px' }}>{health.danglingMappings}</strong>
+              <span className="stat-card-label">Dangling Mappings</span>
+              <strong className="stat-card-value">{health.danglingMappings}</strong>
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: 'var(--bg-surface)',
-              padding: '16px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              gap: '16px',
-            }}
-          >
-            <FileText size={32} color="var(--text-muted)" />
+          <div className="stat-card">
+            <div className="stat-card-icon stat-card-icon-neutral">
+              <FileText size={20} />
+            </div>
             <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>
-                Files w/o Mount Path
-              </span>
-              <strong style={{ fontSize: '16px' }}>{health.filesNoMountPath}</strong>
+              <span className="stat-card-label">Files w/o Mount Path</span>
+              <strong className="stat-card-value">{health.filesNoMountPath}</strong>
             </div>
           </div>
         </div>
@@ -1706,48 +1907,50 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
         {/* Gone list & Play log split */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
           {/* Gone List */}
-          <div
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              padding: '16px',
-            }}
-          >
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>
-              Gone Torrents Audit (Recent 10)
-            </h3>
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Gone Torrents Audit (Recent 10)</h3>
+              <button
+                className="btn btn-danger"
+                style={{ padding: '4px 10px', fontSize: '11px' }}
+                disabled={health.goneCount === 0 || purgeGoneTorrents.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Delete all ${health.goneCount} gone torrent${health.goneCount === 1 ? '' : 's'} from the database? This cannot be undone (TorBox itself is unaffected).`,
+                    )
+                  ) {
+                    purgeGoneTorrents.mutate();
+                  }
+                }}
+              >
+                {purgeGoneTorrents.isPending ? 'Deleting...' : `Delete All Gone (${health.goneCount})`}
+              </button>
+            </div>
             {health.goneTorrents.length === 0 ? (
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                No gone torrents recorded.
-              </p>
+              <p className="panel-empty">No gone torrents recorded.</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {health.goneTorrents.map((t) => (
-                  <div
-                    key={t.hash}
-                    style={{
-                      padding: '8px',
-                      background: 'var(--bg-main)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                    }}
-                  >
-                    <div
-                      className="mono"
-                      style={{
-                        fontWeight: 600,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                  <div key={t.hash} className="list-item">
+                    <div className="list-item-main">
+                      <div className="mono list-item-title">{t.name}</div>
+                      <div className="list-item-meta">
+                        Last seen: {new Date(t.lastSeen).toLocaleString()}
+                      </div>
+                    </div>
+                    <button
+                      className="icon-btn"
+                      title="Delete this torrent from the database"
+                      disabled={deleteTorrent.isPending}
+                      onClick={() => {
+                        if (window.confirm(`Delete "${t.name}" from the database?`)) {
+                          deleteTorrent.mutate(t.hash);
+                        }
                       }}
                     >
-                      {t.name}
-                    </div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      Last seen: {new Date(t.lastSeen).toLocaleString()}
-                    </div>
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1755,21 +1958,12 @@ function HealthView({ health, isLoading, triggerIngest }: HealthViewProps) {
           </div>
 
           {/* Recent Plays */}
-          <div
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              padding: '16px',
-            }}
-          >
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 600 }}>
-              Playback Audit History (Recent 50)
-            </h3>
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Playback Audit History (Recent 50)</h3>
+            </div>
             {health.recentPlays.length === 0 ? (
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                No play history logged yet.
-              </p>
+              <p className="panel-empty">No play history logged yet.</p>
             ) : (
               <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 <table>
@@ -1837,7 +2031,7 @@ interface FeedViewProps {
 function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library }: FeedViewProps) {
   const [downloadingTopicId, setDownloadingTopicId] = useState<number | null>(null);
 
-  if (isLoading) return <div className="view-body">Loading RuTracker feed...</div>;
+  if (isLoading) return <LoadingState label="Loading RuTracker feed..." />;
 
   return (
     <>
@@ -1847,13 +2041,12 @@ function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library 
 
       <div className="view-body">
         {feed.length === 0 ? (
-          <div style={{ textAlign: 'center', paddingTop: '100px' }}>
-            <Rss size={48} color="var(--text-muted)" style={{ marginBottom: '16px' }} />
-            <h3>No feed matches yet</h3>
-            <p style={{ color: 'var(--text-muted)' }}>
-              Entries matching a show in your Library will show up here after the next ingest run.
-            </p>
-          </div>
+          <EmptyState
+            icon={Rss}
+            iconColor="var(--text-dim)"
+            title="No feed matches yet"
+            description="Entries matching a show in your Library will show up here after the next ingest run."
+          />
         ) : (
           <div className="table-container">
             <table>
@@ -1963,27 +2156,12 @@ function FeedMatchPicker({ library, onSelect, disabled }: FeedMatchPickerProps) 
         style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
       />
       {matches.length > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            backgroundColor: 'var(--bg-surface-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: '6px',
-            maxHeight: '180px',
-            overflowY: 'auto',
-            zIndex: 10,
-            marginTop: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          }}
-        >
+        <div className="dropdown-panel" style={{ maxHeight: '180px' }}>
           {matches.map((title) => (
             <div
               key={title.id}
-              className="hover-highlight"
-              style={{ padding: '6px 10px', fontSize: '12px', cursor: 'pointer' }}
+              className="dropdown-panel-item"
+              style={{ fontSize: '12px' }}
               onClick={() => {
                 onSelect(title.id);
                 setQuery('');

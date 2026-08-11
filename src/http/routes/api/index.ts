@@ -15,6 +15,8 @@ import {
   listFeedEntries,
   setTitleId,
   listMappedEpisodeKeys,
+  deleteTorrent,
+  deleteGoneTorrents,
 } from '../../../db/repositories/index.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../../metadata/tmdb.js';
 import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
@@ -199,6 +201,31 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       files: sortedFiles,
       rules,
     };
+  });
+
+  // DELETE /api/torrents/:hash - Delete a single gone torrent. Scoped to
+  // status='gone' at the repo layer, so an active torrent is refused with a
+  // 409 rather than silently no-op'd -- the UI needs a clear reason why
+  // nothing happened. Cascades to files/rules/mappings via existing FKs.
+  app.delete('/torrents/:hash', async (request, reply) => {
+    const { hash } = request.params as { hash: string };
+
+    const torrent = await getTorrentByHash(hash);
+    if (!torrent) {
+      return reply.code(404).send({ success: false, error: 'Torrent not found' });
+    }
+    if (torrent.status !== 'gone') {
+      return reply.code(409).send({ success: false, error: 'Cannot delete an active torrent' });
+    }
+
+    await deleteTorrent(hash);
+    return { success: true };
+  });
+
+  // POST /api/torrents/purge-gone - Bulk-delete every gone torrent.
+  app.post('/torrents/purge-gone', async (_request, _reply) => {
+    const deletedCount = await deleteGoneTorrents();
+    return { success: true, deletedCount };
   });
 
   // POST /api/torrents/:hash/preview - Run the LLM extraction for one
