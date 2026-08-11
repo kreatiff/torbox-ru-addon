@@ -530,6 +530,14 @@ input:focus, select:focus, textarea:focus {
   cursor: not-allowed;
 }
 
+/* Non-destructive variant (e.g. Edit) -- .icon-btn's default hover reads as
+   danger/delete, which is the right default everywhere else it's used. */
+.icon-btn-neutral:hover:not(:disabled) {
+  color: var(--accent-info);
+  border-color: var(--accent-info-border);
+  background-color: var(--accent-info-bg);
+}
+
 /* Two-pane Labeller Layout */
 .labeller-grid {
   display: grid;
@@ -1008,4 +1016,69 @@ input:focus, select:focus, textarea:focus {
 .toast-error {
   background-color: #3a1414;
   border-color: var(--accent-danger-border);
+}
+
+/* Modal (Library "Add Title" / "Edit IDs") */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1500;
+  padding: 24px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.15s var(--ease);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  display: block;
 }

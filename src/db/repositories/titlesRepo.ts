@@ -44,6 +44,12 @@ export async function findByTmdbId(tmdbId: number): Promise<Title | null> {
   return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
 
+export async function getTitleById(id: string): Promise<Title | null> {
+  const result = await pool.query('select * from titles where id = $1', [id]);
+  const row = result.rows[0];
+  return row ? toTitle(titleRowSchema.parse(row)) : null;
+}
+
 /** Case-insensitive normalised lookup against existing titles (name + aliases).
  * Returns null if the match is ambiguous (more than one title with the same
  * normalised name). */
@@ -115,6 +121,45 @@ export async function findOrCreateTitle(
     throw new Error('Failed to create title');
   }
   return toTitle(titleRowSchema.parse(row));
+}
+
+const TITLE_UPDATE_COLUMNS: Record<string, string> = {
+  imdbId: 'imdb_id',
+  tvdbId: 'tvdb_id',
+  tmdbId: 'tmdb_id',
+  nameRu: 'name_ru',
+  nameEn: 'name_en',
+  year: 'year',
+  posterUrl: 'poster_url',
+};
+
+/**
+ * Partial update for manual corrections from the Library UI (e.g. fixing a
+ * wrong TMDB match, or filling in an id the auto-resolver couldn't find) --
+ * only the keys present in `patch` are touched, so `{}` is a no-op read.
+ * Unique-constraint conflicts (another title already owns the imdb/tvdb/tmdb
+ * id being set) surface as the raw pg error; callers use db/errors.ts'
+ * toConflictError to turn that into a clean 409.
+ */
+export type TitlePatch = { [K in keyof Omit<Title, 'id' | 'aliases'>]?: Title[K] | undefined };
+
+export async function updateTitle(id: string, patch: TitlePatch): Promise<Title | null> {
+  const entries = Object.entries(patch).filter(
+    ([key, value]) => key in TITLE_UPDATE_COLUMNS && value !== undefined,
+  );
+  if (entries.length === 0) {
+    return getTitleById(id);
+  }
+
+  const setClauses = entries.map(([key], idx) => `${TITLE_UPDATE_COLUMNS[key]} = $${idx + 2}`);
+  const values = entries.map(([, value]) => value);
+
+  const result = await pool.query(
+    `update titles set ${setClauses.join(', ')} where id = $1 returning *`,
+    [id, ...values],
+  );
+  const row = result.rows[0];
+  return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
 
 export interface TitleWithSeasons extends Title {
