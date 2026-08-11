@@ -6,6 +6,8 @@ import {
   listKnownHashes,
   markAbsentGone,
   upsertTorrent,
+  deleteTorrent,
+  deleteGoneTorrents,
 } from '../../../src/db/repositories/torrentsRepo.js';
 
 describe.skipIf(!hasTestDb)('torrentsRepo', () => {
@@ -135,5 +137,83 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
 
     const missing = await getTorrentByHash('does-not-exist');
     expect(missing).toBeNull();
+  });
+
+  it('deleteTorrent refuses to delete an active torrent', async () => {
+    await upsertTorrent({
+      hash: 'abc123',
+      torboxId: 1,
+      name: 'Some Show',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    const deleted = await deleteTorrent('abc123');
+    expect(deleted).toBe(false);
+    expect(await getTorrentByHash('abc123')).not.toBeNull();
+  });
+
+  it('deleteTorrent deletes a gone torrent and cascades to its files/rules/mappings', async () => {
+    await upsertTorrent({
+      hash: 'abc123',
+      torboxId: 1,
+      name: 'Some Show',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    await markAbsentGone(['unrelated']);
+
+    const fileResult = await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ($1, 1, 'S01E01.mkv', 100, true) returning id`,
+      ['abc123'],
+    );
+    const fileId = fileResult.rows[0].id;
+
+    const deleted = await deleteTorrent('abc123');
+    expect(deleted).toBe(true);
+    expect(await getTorrentByHash('abc123')).toBeNull();
+
+    const remainingFiles = await pool.query('select id from files where id = $1', [fileId]);
+    expect(remainingFiles.rows).toHaveLength(0);
+  });
+
+  it('deleteTorrent returns false for an unknown hash', async () => {
+    expect(await deleteTorrent('does-not-exist')).toBe(false);
+  });
+
+  it('deleteGoneTorrents bulk-deletes only gone torrents and returns the count', async () => {
+    await upsertTorrent({
+      hash: 'stays',
+      torboxId: 1,
+      name: 'Stays',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    await upsertTorrent({
+      hash: 'goes-1',
+      torboxId: 2,
+      name: 'Goes 1',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    await upsertTorrent({
+      hash: 'goes-2',
+      torboxId: 3,
+      name: 'Goes 2',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+    await markAbsentGone(['stays']);
+
+    const deletedCount = await deleteGoneTorrents();
+    expect(deletedCount).toBe(2);
+
+    const hashes = await listKnownHashes();
+    expect(hashes).toEqual(new Set(['stays']));
   });
 });

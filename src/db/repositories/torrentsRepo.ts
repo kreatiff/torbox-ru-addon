@@ -114,3 +114,27 @@ export async function markAbsentGone(presentHashes: string[]): Promise<number> {
   );
   return result.rowCount ?? 0;
 }
+
+/**
+ * Deletes a single torrent, scoped to status='gone' as a safety rail -- this
+ * can never delete an active torrent even if a caller passes a bad hash.
+ * Cascades to files/rules/mappings via the existing ON DELETE CASCADE FKs
+ * (migrations/1785725438965_init-schema.ts); play_log has no FK and is
+ * untouched, same as everywhere else audit data is kept. Returns false if no
+ * matching gone torrent existed.
+ */
+export async function deleteTorrent(hash: string): Promise<boolean> {
+  const result = await pool.query(`delete from torrents where hash = $1 and status = 'gone'`, [
+    hash,
+  ]);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Bulk-deletes every gone torrent. Same cascade/safety-rail reasoning as
+ * deleteTorrent. Returns the number of rows deleted.
+ */
+export async function deleteGoneTorrents(): Promise<number> {
+  const result = await pool.query(`delete from torrents where status = 'gone'`);
+  return result.rowCount ?? 0;
+}
