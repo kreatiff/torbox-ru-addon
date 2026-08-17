@@ -143,6 +143,52 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     expect(second.torrentsNew).toBe(0);
   });
 
+  it('one torrent failing its per-id fetch does not abort the rest of the run', async () => {
+    // Two torrents both need a per-id fetch (files absent from mylist).
+    // hash-ok's fetch succeeds; hash-bad's `byId` entry is missing
+    // entirely, so parseEnvelope throws inside getTorrentById -- exactly
+    // the schema-mismatch/network-failure shape this is guarding against.
+    stubTorboxApi({
+      mylist: [
+        { id: 30, hash: 'hash-bad', name: 'Bad Torrent', size: 1000 },
+        { id: 31, hash: 'hash-ok', name: 'Good Torrent', size: 1000 },
+      ],
+      byId: {
+        31: {
+          id: 31,
+          hash: 'hash-ok',
+          name: 'Good Torrent',
+          files: [{ id: 310, name: '01 выпуск.mp4', size: 1_000_000_000 }],
+        },
+      },
+    });
+
+    const summary = await runIngest();
+
+    // The run completed (didn't reject) and got past the per-torrent fetch
+    // step into mark-gone/feed-poll/auto-proposals -- torrentsMarkedGone
+    // being computed at all (as opposed to the whole promise rejecting)
+    // is the signal that matters here.
+    expect(summary.torrentsMarkedGone).toBe(0);
+    expect(summary.perIdFetches).toBe(2);
+    expect(summary.perIdFetchesFailed).toBe(1);
+    expect(summary.filesUpserted).toBe(1);
+
+    const okFiles = await pool.query('select * from files where torrent_hash = $1', ['hash-ok']);
+    expect(okFiles.rows).toHaveLength(1);
+
+    // The failed torrent got neither files nor files_fetched_at -- so a
+    // later run's `needingFetch` picks it up again instead of treating it
+    // as permanently (and silently) fileless.
+    const badFiles = await pool.query('select * from files where torrent_hash = $1', ['hash-bad']);
+    expect(badFiles.rows).toHaveLength(0);
+    const badTorrent = await pool.query(
+      'select files_fetched_at from torrents where hash = $1',
+      ['hash-bad'],
+    );
+    expect(badTorrent.rows[0].files_fetched_at).toBeNull();
+  });
+
   it('marks a torrent gone when absent, then active again when it reappears', async () => {
     stubTorboxApi({ mylist: [{ id: 3, hash: 'hash-c', name: 'Show', files: [] }] });
     await runIngest();

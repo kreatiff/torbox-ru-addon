@@ -42,6 +42,7 @@ export interface IngestSummary {
   torrentsMarkedGone: number;
   filesUpserted: number;
   perIdFetches: number;
+  perIdFetchesFailed: number;
   feedEntriesMatched: number;
   feedEntriesNew: number;
   proposalsCreated: number;
@@ -318,11 +319,26 @@ export async function runIngest(): Promise<IngestSummary> {
     await markFilesFetched([torrent.hash]);
   }
 
+  let perTorrentFetchFailures = 0;
   await throttledMap(needingFetch, async (torrent) => {
-    const full = await getTorrentById(torrent.id);
-    const upserted = await upsertFiles(toUpsertFileInputs(torrent.hash, full.files ?? []));
-    filesUpserted += upserted.length;
-    await markFilesFetched([torrent.hash]);
+    // Isolated per torrent, same idiom as the auto-proposal loop below: one
+    // torrent's fetch failing (a schema mismatch, a transient network
+    // error) must not abort the rest of this run -- mark-gone, the feed
+    // poll, and auto-proposals all still need to happen this cycle. A
+    // failed torrent is simply left with files_fetched_at unset, so
+    // `needingFetch` picks it up again on the next run.
+    try {
+      const full = await getTorrentById(torrent.id);
+      const upserted = await upsertFiles(toUpsertFileInputs(torrent.hash, full.files ?? []));
+      filesUpserted += upserted.length;
+      await markFilesFetched([torrent.hash]);
+    } catch (err) {
+      perTorrentFetchFailures++;
+      logger.warn(
+        { err, hash: torrent.hash, torboxId: torrent.id },
+        'failed to fetch/store files for one torrent; will retry next run',
+      );
+    }
   });
 
   if (needingFetch.length > 0) {
@@ -453,6 +469,7 @@ export async function runIngest(): Promise<IngestSummary> {
     torrentsMarkedGone,
     filesUpserted,
     perIdFetches: needingFetch.length,
+    perIdFetchesFailed: perTorrentFetchFailures,
     feedEntriesMatched,
     feedEntriesNew,
     proposalsCreated,
