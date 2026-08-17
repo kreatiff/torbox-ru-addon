@@ -37,20 +37,27 @@ export interface UpsertFeedEntryInput {
 }
 
 /**
- * ON CONFLICT refreshes title_id and raw_title, not just last_updated: an
- * entry stored with title_id = NULL (RUTRACKER_STORE_UNMATCHED) must pick
- * up a real title_id if the same topic reappears in a later poll after a
- * matching title is added to the library -- updating only last_updated
- * would leave it NULL forever even after a real match exists. raw_title is
- * refreshed too since a `[Обновлено]` re-poll changes the title string
- * itself.
+ * ON CONFLICT refreshes raw_title and last_updated on every poll, but
+ * title_id only when the stored row doesn't already have one: an entry
+ * stored with title_id = NULL (RUTRACKER_STORE_UNMATCHED, or the automatic
+ * matcher missing) must still pick up a real title_id if the same topic
+ * reappears in a later poll after a matching title is added to the library
+ * or the matcher succeeds -- but once a row has a title_id, later polls
+ * must not overwrite it. That title_id may have come from the automatic
+ * matcher OR from a human's manual match (`setTitleId`, the Feed tab's
+ * autocomplete picker) -- either way it's sticky, since a manual match is
+ * exactly a human correcting a case the automatic matcher couldn't (or got
+ * wrong), and re-running the same matcher on the next poll would otherwise
+ * silently revert it back to NULL/whatever the matcher picks. raw_title is
+ * refreshed unconditionally since a `[Обновлено]` re-poll changes the title
+ * string itself.
  */
 export async function upsertFeedEntry(input: UpsertFeedEntryInput): Promise<FeedEntryRecord> {
   const result = await pool.query(
     `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated)
      values ($1, $2, $3, $4, $5)
      on conflict (topic_id) do update set
-       title_id = excluded.title_id,
+       title_id = coalesce(feed_entries.title_id, excluded.title_id),
        raw_title = excluded.raw_title,
        last_updated = excluded.last_updated
      returning *`,
