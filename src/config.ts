@@ -65,8 +65,20 @@ const envSchema = z.object({
   TORBOX_WEBHOOK_TOKEN: z.string().optional(),
 });
 
-function loadConfig() {
-  const parsed = envSchema.safeParse(process.env);
+// Deployment tooling (e.g. docker-compose's `${VAR:-}` interpolation) commonly
+// passes unset optional vars through as empty strings rather than omitting
+// them. Treat "" the same as unset so e.g. `z.url().optional()` fields don't
+// fail validation just because the operator didn't configure them.
+function stripEmptyEnvValues(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== '') result[key] = value;
+  }
+  return result;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
+  const parsed = envSchema.safeParse(stripEmptyEnvValues(env));
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`)
