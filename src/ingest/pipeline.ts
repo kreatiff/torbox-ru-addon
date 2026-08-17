@@ -468,16 +468,16 @@ export async function runIngest(): Promise<IngestSummary> {
 let ingestInFlight: Promise<IngestSummary> | null = null;
 
 /**
- * Coalescing wrapper around runIngest() for triggers that might fire in a
- * burst -- specifically the TorBox webhook (src/http/routes/webhooks): a
- * service can send several notifications ("download started", "download
- * finished") within moments of each other, and each one calls this. A
- * second call while a run is already in flight just returns that run's
+ * Coalescing wrapper around runIngest() -- the single entry point every
+ * trigger source goes through (the scheduler in ./scheduler.ts, the TorBox
+ * webhook in src/http/routes/webhooks, and the admin "run now" button at
+ * POST /api/ingest/run) so overlapping triggers can never run runIngest()
+ * concurrently. Triggers can genuinely race: a webhook notification can
+ * land the same moment the scheduler ticks, or an admin can click "run now"
+ * mid-run. A call while a run is already in flight just returns that run's
  * promise instead of starting a concurrent one; runIngest() isn't designed
- * to be re-entrant (see startIngestScheduler's own `running` guard, in
- * ./scheduler.ts, for the same reasoning on the scheduler's side -- that
- * guard is separate from this one since the scheduler and the webhook are
- * independent trigger sources).
+ * to be re-entrant (e.g. two runs racing to mark the same torrent gone, or
+ * duplicate LLM extraction calls racing upsertRule).
  */
 export function runIngestDeduped(): Promise<IngestSummary> {
   if (ingestInFlight) {

@@ -28,7 +28,7 @@ import {
   fetchSeasonDetails,
   resolveTitleIds,
 } from '../../../metadata/tmdb.js';
-import { runIngest, resolveTitleMatch } from '../../../ingest/pipeline.js';
+import { runIngestDeduped, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
 import { parseFeedEntrySeasonEpisode } from '../../../rutracker/index.js';
@@ -830,8 +830,11 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
 
   // POST /api/ingest/run - Trigger ingest run
   app.post('/ingest/run', async (_request, _reply) => {
-    // Run in background so we don't timeout the response
-    runIngest().catch((err) => {
+    // Run in background so we don't timeout the response. Deduped so an
+    // admin click that lands while the scheduler or the webhook already has
+    // a run in flight joins that run instead of racing it (runIngest() isn't
+    // re-entrant -- see runIngestDeduped's own doc comment).
+    runIngestDeduped().catch((err) => {
       app.log.error({ err }, 'Background Ingest Run failed');
     });
 

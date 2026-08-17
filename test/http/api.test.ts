@@ -10,6 +10,8 @@ import {
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
+import { runIngestDeduped } from '../../src/ingest/pipeline.js';
+import type * as PipelineModule from '../../src/ingest/pipeline.js';
 
 vi.mock('../../src/metadata/tmdb.js', () => ({
   searchTitles: vi.fn(),
@@ -21,6 +23,11 @@ vi.mock('../../src/metadata/tmdb.js', () => ({
 vi.mock('../../src/llm/opencodeZen.js', () => ({
   extractEpisodes: vi.fn(),
 }));
+
+vi.mock('../../src/ingest/pipeline.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof PipelineModule>();
+  return { ...actual, runIngestDeduped: vi.fn() };
+});
 
 const authHeader = 'Basic ' + Buffer.from('admin:supersecret').toString('base64');
 
@@ -1279,6 +1286,31 @@ describe.skipIf(!hasTestDb)('POST /api/feed/:topicId/match (real Postgres)', () 
       payload: {},
     });
     expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('POST /api/ingest/run', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    vi.mocked(runIngestDeduped).mockReset().mockResolvedValue({} as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('triggers a deduped ingest run in the background', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ingest/run',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ success: true, message: 'Ingest run triggered in background' });
+    expect(runIngestDeduped).toHaveBeenCalledTimes(1);
     await app.close();
   });
 });
