@@ -58,8 +58,15 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       cachedAt: null,
       addedAt: null,
     });
+    // markAbsentGone only affects torrents already confirmed present at
+    // least once -- see below -- so mark files fetched first to actually
+    // exercise the gone transition this test is about.
+    await markFilesFetched(['abc123']);
     await markAbsentGone([]); // no-op guard, see below
     await markAbsentGone(['some-other-hash']);
+    const goneCheck = await getTorrentByHash('abc123');
+    expect(goneCheck?.status).toBe('gone');
+
     const reupserted = await upsertTorrent({
       hash: 'abc123',
       torboxId: 1,
@@ -88,11 +95,14 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       cachedAt: null,
       addedAt: null,
     });
+    // Both already confirmed present at least once -- markAbsentGone only
+    // ever acts on torrents past that point (see the dedicated pre-mapped
+    // test below for the case where it must NOT act).
+    await markFilesFetched(['stays', 'disappears']);
 
     const affected = await markAbsentGone(['stays']);
     expect(affected).toBe(1);
 
-    await markFilesFetched(['stays', 'disappears']);
     const hashes = await listKnownHashes();
     expect(hashes).toEqual(new Set(['stays', 'disappears']));
   });
@@ -106,8 +116,41 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       cachedAt: null,
       addedAt: null,
     });
+    await markFilesFetched(['abc123']);
     const affected = await markAbsentGone([]);
     expect(affected).toBe(0);
+  });
+
+  it('markAbsentGone never marks a torrent gone before its files have ever been fetched', async () => {
+    // Exactly downloadFeedEntry's preMapIfPossible: a torrents row seeded
+    // (status 'active', files_fetched_at still null) before TorBox has
+    // actually listed the torrent in a mylist response yet. It hasn't
+    // "disappeared" -- it was never confirmed present in the first place --
+    // so it must stay active rather than transiently going 'gone' (and
+    // becoming eligible for cascade-delete via "Delete All Gone") just
+    // because this run's mylist doesn't include it yet.
+    await upsertTorrent({
+      hash: 'pre-mapped',
+      torboxId: 1,
+      name: 'Pre-Mapped Show',
+      totalSize: null,
+      cachedAt: null,
+      addedAt: null,
+    });
+
+    const affected = await markAbsentGone(['unrelated-hash']);
+    expect(affected).toBe(0);
+
+    const torrent = await getTorrentByHash('pre-mapped');
+    expect(torrent?.status).toBe('active');
+
+    // Once it's actually been ingested (files fetched), the normal
+    // absence-means-gone rule applies again.
+    await markFilesFetched(['pre-mapped']);
+    const affectedAfterFetch = await markAbsentGone(['unrelated-hash']);
+    expect(affectedAfterFetch).toBe(1);
+    const torrentAfterFetch = await getTorrentByHash('pre-mapped');
+    expect(torrentAfterFetch?.status).toBe('gone');
   });
 
   it('listKnownHashes excludes a torrent whose files were never fetched, regardless of status', async () => {
@@ -176,6 +219,7 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       cachedAt: null,
       addedAt: null,
     });
+    await markFilesFetched(['abc123']);
     await markAbsentGone(['unrelated']);
 
     const fileResult = await pool.query(
@@ -222,8 +266,8 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       cachedAt: null,
       addedAt: null,
     });
-    await markAbsentGone(['stays']);
     await markFilesFetched(['stays', 'goes-1', 'goes-2']);
+    await markAbsentGone(['stays']);
 
     const deletedCount = await deleteGoneTorrents();
     expect(deletedCount).toBe(2);

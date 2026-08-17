@@ -119,6 +119,19 @@ export async function upsertTorrent(input: UpsertTorrentInput): Promise<Torrent>
  * spec calls out (§9), just one step downstream. The ingest pipeline should
  * also refuse to call this with an empty list from a suspicious response;
  * this is the last line of defense.
+ *
+ * Also excludes torrents whose files have never been fetched
+ * (files_fetched_at is null) — a torrent seeded early by
+ * downloadFeedEntry's preMapIfPossible exists as a row (status 'active')
+ * the moment TorBox accepts the magnet, but can take a run or two before it
+ * actually shows up in a mylist response while TorBox finishes caching it.
+ * Without this guard, that window looked identical to a real disappearance
+ * and got marked 'gone' -- and "Delete All Gone" or DELETE
+ * /api/torrents/:hash would then cascade-delete the pre-created rule and
+ * this seed row, defeating the whole pre-mapping. A torrent only ever
+ * legitimately goes 'gone' after it was actually confirmed present at
+ * least once (files_fetched_at set by markFilesFetched), so requiring that
+ * here costs nothing for the normal case and closes the pre-mapped one.
  */
 /** Active torrents that have no rule row yet. This is the same set the Queue UI
  * shows, and the pipeline proposes rules for them during each ingest run. */
@@ -138,7 +151,8 @@ export async function markAbsentGone(presentHashes: string[]): Promise<number> {
     return 0;
   }
   const result = await pool.query(
-    `update torrents set status = 'gone' where status = 'active' and hash <> all($1::text[])`,
+    `update torrents set status = 'gone'
+     where status = 'active' and files_fetched_at is not null and hash <> all($1::text[])`,
     [presentHashes],
   );
   return result.rowCount ?? 0;
