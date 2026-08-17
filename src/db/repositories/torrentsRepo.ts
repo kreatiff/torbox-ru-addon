@@ -12,6 +12,7 @@ export interface Torrent {
   firstSeen: Date;
   lastSeen: Date;
   status: 'active' | 'gone';
+  filesFetchedAt: Date | null;
 }
 
 function toTorrent(row: TorrentRow): Torrent {
@@ -26,6 +27,7 @@ function toTorrent(row: TorrentRow): Torrent {
     firstSeen: row.first_seen,
     lastSeen: row.last_seen,
     status: row.status,
+    filesFetchedAt: row.files_fetched_at,
   };
 }
 
@@ -38,13 +40,36 @@ export async function getTorrentByHash(hash: string): Promise<Torrent | null> {
   return row ? toTorrent(torrentRowSchema.parse(row)) : null;
 }
 
-/** Every hash currently in `torrents`, regardless of status. A torrent's file
- * list can't change once ingested (the hash *is* a content hash), so this is
- * how ingest decides which torrents are new enough to need a files fetch —
- * capture this BEFORE upsertTorrents, not after. */
+/** Every hash whose files have already been fetched from TorBox, regardless
+ * of status. A torrent's file list can't change once ingested (the hash *is*
+ * a content hash), so this is how ingest decides which torrents still need a
+ * files fetch — capture this BEFORE upsertTorrents, not after.
+ *
+ * Deliberately keyed on files_fetched_at rather than mere row presence in
+ * `torrents`: preMapIfPossible (src/ingest/downloadFeedEntry.ts) inserts a
+ * torrents row at download time, before TorBox has any files for it, so a
+ * hash can be "known" long before its files ever get fetched. */
 export async function listKnownHashes(): Promise<Set<string>> {
-  const result = await pool.query<{ hash: string }>('select hash from torrents');
+  const result = await pool.query<{ hash: string }>(
+    'select hash from torrents where files_fetched_at is not null',
+  );
   return new Set(result.rows.map((r) => r.hash));
+}
+
+/** Marks these hashes' files as fetched (now()), so future ingest runs don't
+ * re-fetch them. Call once per torrent after its file list has actually been
+ * read from TorBox (mylist's inline files or the per-id ?id= fallback) —
+ * including when that list came back empty, so a torrent with genuinely zero
+ * video files doesn't get retried forever. Never called from upsertTorrent's
+ * ON CONFLICT path itself, so a pre-mapped torrent (see listKnownHashes)
+ * stays eligible for its real fetch. */
+export async function markFilesFetched(hashes: string[]): Promise<void> {
+  if (hashes.length === 0) {
+    return;
+  }
+  await pool.query('update torrents set files_fetched_at = now() where hash = any($1::text[])', [
+    hashes,
+  ]);
 }
 
 export interface UpsertTorrentInput {
@@ -61,7 +86,11 @@ export interface UpsertTorrentInput {
  * first insert only — it is deliberately absent from the ON CONFLICT SET
  * list so a later call can never touch it. current_name tracks whatever
  * TorBox reports live. Re-upserting a torrent that had gone 'gone' flips it
- * back to 'active'.
+ * back to 'active'. files_fetched_at is likewise absent from both the insert
+ * columns and the ON CONFLICT SET list — it defaults to NULL on insert and is
+ * only ever set by markFilesFetched, so calling this repeatedly (as the
+ * pre-map seed and the real per-run upsert both do) never marks a torrent's
+ * files fetched by accident.
  */
 export async function upsertTorrent(input: UpsertTorrentInput): Promise<Torrent> {
   const result = await pool.query(

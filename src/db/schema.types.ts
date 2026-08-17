@@ -19,6 +19,7 @@ export const torrentRowSchema = z.object({
   first_seen: z.date(),
   last_seen: z.date(),
   status: torrentStatusSchema,
+  files_fetched_at: z.date().nullable(),
 });
 export type TorrentRow = z.infer<typeof torrentRowSchema>;
 

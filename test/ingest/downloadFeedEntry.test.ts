@@ -5,6 +5,7 @@ import { config } from '../../src/config.js';
 import { downloadFeedEntry } from '../../src/ingest/downloadFeedEntry.js';
 import { upsertFiles } from '../../src/db/repositories/filesRepo.js';
 import { rebuildAllMappings } from '../../src/ingest/materialize.js';
+import { runIngest } from '../../src/ingest/pipeline.js';
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 
 vi.mock('../../src/llm/opencodeZen.js', () => ({
@@ -106,6 +107,96 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
     // The whole point: no LLM call was ever made for this torrent, because
     // it never showed up as "unruled" -- the rule already existed.
     expect(extractEpisodes).not.toHaveBeenCalled();
+  });
+
+  it('a real ingest run after pre-mapping still fetches the torrent files (regression: pre-mapped torrents were never fetched)', async () => {
+    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const titleId = title.rows[0].id as string;
+    await pool.query(
+      `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
+       (10, $1, 'Большой куш. Бангкок 2 сезон: 7 выпуск [2026]', 'https://rutracker.org/forum/viewtopic.php?t=10', now())`,
+      [titleId],
+    );
+
+    const hash = 'fedcba0987654321fedcba0987654321fedcba0';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = input.toString();
+        if (url.includes(':8191')) {
+          return new Response(
+            JSON.stringify({
+              status: 'ok',
+              solution: {
+                response:
+                  '<a href="magnet:?xt=urn:btih:FEDCBA0987654321FEDCBA0987654321FEDCBA0">m</a>',
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('createtorrent')) {
+          return new Response(
+            JSON.stringify({ success: true, data: { torrent_id: 777, hash } }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/refresh/')) {
+          return new Response(null, { status: 200 });
+        }
+        if (url.includes('feed.rutracker.cc')) {
+          throw new Error('rutracker feed not stubbed for this test');
+        }
+        const idMatch = /[?&]id=(\d+)/.exec(url);
+        if (idMatch) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                id: 777,
+                hash,
+                name: 'Большой куш. Бангкок 2 сезон: 7 выпуск [2026]',
+                files: [{ id: 1, name: 'Bolshoy.Kush.Bangkok.S02E07.mp4', size: 900_000_000 }],
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/torrents/mylist')) {
+          // Real TorBox bulk responses routinely omit `files` for a torrent,
+          // forcing the per-id fallback above -- exactly the path a
+          // pre-mapped torrent used to never reach.
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: [{ id: 777, hash, name: 'Большой куш. Бангкок 2 сезон: 7 выпуск [2026]' }],
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`unexpected fetch in test: ${url}`);
+      }),
+    );
+
+    const downloadResult = await downloadFeedEntry(10);
+    expect(downloadResult.ok).toBe(true);
+
+    // Before the fix, this hash was already present in `torrents` (seeded by
+    // preMapIfPossible), so runIngest's "new torrents need a files fetch"
+    // check skipped it forever -- the rule existed but its files never did.
+    const summary = await runIngest();
+    expect(summary.filesUpserted).toBe(1);
+
+    const files = await pool.query('select raw_path, is_video from files where torrent_hash = $1', [
+      hash,
+    ]);
+    expect(files.rows).toEqual([{ raw_path: 'Bolshoy.Kush.Bangkok.S02E07.mp4', is_video: true }]);
+
+    const mapping = await pool.query(
+      `select m.season, m.episode from mappings m join files f on f.id = m.file_id where f.torrent_hash = $1`,
+      [hash],
+    );
+    expect(mapping.rows).toEqual([{ season: 2, episode: 7 }]);
   });
 
   it('falls through to normal unruled-torrent handling when the episode cannot be parsed from the title', async () => {

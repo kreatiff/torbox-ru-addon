@@ -3,7 +3,13 @@ import { logger } from '../logger.js';
 import { getMylist, getTorrentById, refreshWebdav } from '../torbox/client.js';
 import { throttledMap } from '../torbox/rateLimit.js';
 import type { TorboxFile, TorboxTorrent } from '../torbox/schemas.js';
-import { listActiveUnruledTorrents, listKnownHashes, markAbsentGone, upsertTorrent } from '../db/repositories/torrentsRepo.js';
+import {
+  listActiveUnruledTorrents,
+  listKnownHashes,
+  markAbsentGone,
+  markFilesFetched,
+  upsertTorrent,
+} from '../db/repositories/torrentsRepo.js';
 import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
 import { findOrCreateTitle, findTitleByCleanedName, listAll as listAllTitles, type Title } from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
@@ -271,8 +277,12 @@ export async function runIngest(): Promise<IngestSummary> {
 
   // Must be captured before upserting this run's batch: a torrent's file
   // list can't change once ingested (the hash IS a content hash), so
-  // "known before this run" is exactly the set that should NOT trigger a
-  // files fetch, regardless of whether it's currently active or gone.
+  // "already had its files fetched before this run" is exactly the set that
+  // should NOT trigger another files fetch, regardless of whether it's
+  // currently active or gone. Keyed on files_fetched_at, not mere row
+  // presence in `torrents` -- a torrent can have a row (e.g. seeded early by
+  // downloadFeedEntry's preMapIfPossible) without ever having had its files
+  // fetched yet.
   const knownHashesBefore = await listKnownHashes();
 
   const mylist: TorboxTorrent[] = await getMylist();
@@ -305,12 +315,14 @@ export async function runIngest(): Promise<IngestSummary> {
   for (const torrent of withInlineFiles) {
     const upserted = await upsertFiles(toUpsertFileInputs(torrent.hash, torrent.files ?? []));
     filesUpserted += upserted.length;
+    await markFilesFetched([torrent.hash]);
   }
 
   await throttledMap(needingFetch, async (torrent) => {
     const full = await getTorrentById(torrent.id);
     const upserted = await upsertFiles(toUpsertFileInputs(torrent.hash, full.files ?? []));
     filesUpserted += upserted.length;
+    await markFilesFetched([torrent.hash]);
   });
 
   if (needingFetch.length > 0) {

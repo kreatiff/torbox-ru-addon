@@ -5,6 +5,7 @@ import {
   getTorrentByHash,
   listKnownHashes,
   markAbsentGone,
+  markFilesFetched,
   upsertTorrent,
   deleteTorrent,
   deleteGoneTorrents,
@@ -91,6 +92,7 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
     const affected = await markAbsentGone(['stays']);
     expect(affected).toBe(1);
 
+    await markFilesFetched(['stays', 'disappears']);
     const hashes = await listKnownHashes();
     expect(hashes).toEqual(new Set(['stays', 'disappears']));
   });
@@ -108,7 +110,7 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
     expect(affected).toBe(0);
   });
 
-  it('listKnownHashes returns hashes regardless of status', async () => {
+  it('listKnownHashes excludes a torrent whose files were never fetched, regardless of status', async () => {
     await upsertTorrent({
       hash: 'abc123',
       torboxId: 1,
@@ -118,8 +120,20 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       addedAt: null,
     });
     await markAbsentGone(['unrelated']);
-    const hashes = await listKnownHashes();
+
+    // Row exists (e.g. seeded early by downloadFeedEntry's preMapIfPossible),
+    // but files_fetched_at is still null -- this hash must stay eligible for
+    // a files fetch, not look "known" just because a torrents row exists.
+    let hashes = await listKnownHashes();
+    expect(hashes.has('abc123')).toBe(false);
+
+    await markFilesFetched(['abc123']);
+    hashes = await listKnownHashes();
     expect(hashes.has('abc123')).toBe(true);
+  });
+
+  it('markFilesFetched is a no-op on an empty hash list', async () => {
+    await expect(markFilesFetched([])).resolves.toBeUndefined();
   });
 
   it('getTorrentByHash returns the torrent, or null when unknown', async () => {
@@ -209,6 +223,7 @@ describe.skipIf(!hasTestDb)('torrentsRepo', () => {
       addedAt: null,
     });
     await markAbsentGone(['stays']);
+    await markFilesFetched(['stays', 'goes-1', 'goes-2']);
 
     const deletedCount = await deleteGoneTorrents();
     expect(deletedCount).toBe(2);
