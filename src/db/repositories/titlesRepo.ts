@@ -50,18 +50,24 @@ export async function getTitleById(id: string): Promise<Title | null> {
   return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
 
-/** Case-insensitive normalised lookup against existing titles (name + aliases).
- * Returns null if the match is ambiguous (more than one title with the same
- * normalised name). */
+/**
+ * Normalised lookup against existing titles (name + aliases) -- normalise()
+ * folds Cyrillic/Latin homoglyphs and ё/е, so this catches matches a raw
+ * case-insensitive comparison would miss (mixed-script or ё/е variants of
+ * the same torrent-derived name). Returns null if the match is ambiguous
+ * (more than one title with the same normalised name).
+ *
+ * Fetches every title rather than prefiltering in SQL: a prefilter on the
+ * *raw* string (e.g. `lower(name_ru) = lower($1)`) would exclude exactly
+ * the rows this function exists to catch -- a title whose raw name differs
+ * from cleanedName only by a homoglyph or ё/е never matches the raw
+ * prefilter, so it would never reach the normalise() comparison below at
+ * all. A full scan is the same "table is small" tradeoff listAll() already
+ * makes for the feed matcher.
+ */
 export async function findTitleByCleanedName(cleanedName: string): Promise<Title | null> {
   const target = normalise(cleanedName);
-  const result = await pool.query(
-    `select * from titles
-     where lower(name_ru) = lower($1)
-        or lower(coalesce(name_en, '')) = lower($1)
-        or exists (select 1 from unnest(aliases) a where lower(a) = lower($1))`,
-    [cleanedName],
-  );
+  const result = await pool.query('select * from titles');
   const matches = result.rows
     .map((row) => toTitle(titleRowSchema.parse(row)))
     .filter(
@@ -70,7 +76,7 @@ export async function findTitleByCleanedName(cleanedName: string): Promise<Title
         (t.nameEn && normalise(t.nameEn) === target) ||
         t.aliases.some((a) => normalise(a) === target),
     );
-  return matches[0] ?? null;
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 /** Every title in the library -- used by the feed scraper to match against

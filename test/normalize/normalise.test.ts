@@ -27,9 +27,16 @@ describe('normalise', () => {
     expect(normalise('Т')).toBe('t');
   });
 
-  it('folds ё→е', () => {
-    expect(normalise('ё')).toBe('е');
-    expect(normalise('Ё')).toBe('е');
+  it('folds ё→е, then е through the same Cyrillic→Latin homoglyph lookup as any other е', () => {
+    // Regression: ё used to fold to a *Cyrillic* е and stop there, while a
+    // plain е folds all the way to Latin e -- two different output
+    // characters for what should be the same normalised form, so
+    // normalise('Ёжик') !== normalise('Ежик') even though both are real
+    // spellings of the same title.
+    expect(normalise('ё')).toBe('e');
+    expect(normalise('Ё')).toBe('e');
+    expect(normalise('ё')).toBe(normalise('е'));
+    expect(normalise('Ёжик')).toBe(normalise('Ежик'));
   });
 
   it('collapses whitespace and lowercases', () => {

@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { hasTestDb, truncateAll } from '../testDb.js';
 import { pool } from '../../../src/db/pool.js';
-import { getTitleById, updateTitle } from '../../../src/db/repositories/titlesRepo.js';
+import {
+  getTitleById,
+  updateTitle,
+  findTitleByCleanedName,
+} from '../../../src/db/repositories/titlesRepo.js';
 
 describe.skipIf(!hasTestDb)('titlesRepo', () => {
   beforeEach(async () => {
@@ -79,6 +83,54 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
       const id = inserted.rows[0].id as string;
 
       await expect(updateTitle(id, { tmdbId: 42 })).rejects.toMatchObject({ code: '23505' });
+    });
+  });
+
+  describe('findTitleByCleanedName', () => {
+    it('finds an exact (case-insensitive) match on name_ru', async () => {
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Большой куш') returning id`,
+      );
+      const found = await findTitleByCleanedName('большой куш');
+      expect(found?.id).toBe(inserted.rows[0].id);
+    });
+
+    it('finds a match that only differs by ё/е -- normalised, not raw, comparison', async () => {
+      // The SQL prefilter used to compare the raw strings
+      // (`lower(name_ru) = lower($1)`), which never matches when the only
+      // difference is ё vs е -- normalise() folds that, but a row that
+      // differs only this way never survived the raw-string SQL filter to
+      // reach the JS-side normalise() comparison at all.
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Ёжик в тумане') returning id`,
+      );
+      const found = await findTitleByCleanedName('Ежик в тумане');
+      expect(found?.id).toBe(inserted.rows[0].id);
+    });
+
+    it('finds a match via an alias, normalised', async () => {
+      const inserted = await pool.query(
+        `insert into titles (name_ru, aliases) values ('Show', array['Ёлки']) returning id`,
+      );
+      const found = await findTitleByCleanedName('Елки');
+      expect(found?.id).toBe(inserted.rows[0].id);
+    });
+
+    it('returns null (not an arbitrary pick) when the normalised name is ambiguous', async () => {
+      // Two distinct titles that both normalise to the same target -- the
+      // docstring promises null here; the old implementation returned
+      // matches[0] unconditionally instead.
+      await pool.query(`insert into titles (name_ru) values ('Ёжик')`);
+      await pool.query(`insert into titles (name_ru) values ('ежик')`);
+
+      const found = await findTitleByCleanedName('Ежик');
+      expect(found).toBeNull();
+    });
+
+    it('returns null when nothing matches', async () => {
+      await pool.query(`insert into titles (name_ru) values ('Совсем другое шоу')`);
+      const found = await findTitleByCleanedName('Несуществующее шоу');
+      expect(found).toBeNull();
     });
   });
 });
