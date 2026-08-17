@@ -628,13 +628,22 @@ function AdminApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['library'] });
       queryClient.invalidateQueries({ queryKey: ['torrentDetails'] });
       setSelectedTorrentHash(null);
       setEditingRuleId(null);
       setActiveTab(returnTab);
+      // The server responds 207 (still `res.ok`, so apiFetch treats it as
+      // success) when the rule itself saved but rebuilding its mappings
+      // failed -- e.g. two rules on one torrent whose file ranges overlap
+      // (see docs/decisions.md). Without this, that failure was invisible:
+      // the rule looked saved and the human had no idea its season ended
+      // up with zero mappings.
+      if (result.warning) {
+        showToast(result.warning, 'error');
+      }
     },
     onError: (err) => {
       showToast(`Failed to save rule: ${err.message}`, 'error');
