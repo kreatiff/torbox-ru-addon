@@ -84,11 +84,32 @@ interface QueueItem {
   rawNameAtIngest: string;
   firstSeen: string;
   fileCount: number;
+  ruleId: string | null;
   proposal: {
     proposedTitle: string;
     proposedSeason: number;
     confidence: number;
     why: string;
+    numbering: 'sequential' | 'parsed' | 'continuous' | 'manual';
+    sort: 'natural' | 'path';
+    startEpisode: number;
+    absoluteOffset: number | null;
+    exceptions: Record<string, RuleException>;
+    // Only set once the LLM/regex proposal resolved to a known or
+    // TMDB-found title -- expandRule requires a resolved title to run at
+    // all (see proposeRule.ts), so a null here means there is nothing safe
+    // to quick-accept; the Labeller is the only way to resolve one.
+    titleId: string | null;
+    title: {
+      id: string;
+      tmdbId: number | null;
+      imdbId: string | null;
+      tvdbId: number | null;
+      nameRu: string;
+      nameEn: string | null;
+      year: number | null;
+      posterUrl: string | null;
+    } | null;
   };
 }
 
@@ -718,20 +739,36 @@ function AdminApp() {
           // Quick accept proposal
           const target = queue[selectedQueueIdx];
           if (target && target.proposal) {
+            if (!target.proposal.titleId) {
+              // No resolved title match to accept -- expandRule requires
+              // one, so there's nothing safe to save from here. Send the
+              // human to the Labeller to resolve the title first instead
+              // of fabricating a bare-name title that can never stream.
+              showToast(
+                'No confirmed title match yet for this proposal -- open the Labeller to resolve one.',
+                'error',
+              );
+              break;
+            }
             const accept = window.confirm(
-              `Quick-accept proposal: "${target.proposal.proposedTitle}" (Season ${target.proposal.proposedSeason})?`,
+              `Quick-accept proposal: "${target.proposal.title?.nameRu ?? target.proposal.proposedTitle}" (Season ${target.proposal.proposedSeason})?`,
             );
             if (accept) {
+              // Reuse the server's own proposal verbatim (numbering/sort/
+              // startEpisode/absoluteOffset/exceptions, and the already-
+              // resolved titleId) instead of guessing -- for an LLM
+              // proposal that's 'manual' numbering plus a per-file
+              // exceptions map, not the 'sequential' default this used to
+              // hardcode.
               saveRule.mutate({
                 torrentHash: target.hash,
                 season: target.proposal.proposedSeason,
-                numbering: 'sequential',
-                sort: 'natural',
-                startEpisode: 1,
-                exceptions: {},
-                title: {
-                  nameRu: target.proposal.proposedTitle,
-                },
+                numbering: target.proposal.numbering,
+                sort: target.proposal.sort,
+                startEpisode: target.proposal.startEpisode,
+                absoluteOffset: target.proposal.absoluteOffset,
+                exceptions: target.proposal.exceptions,
+                titleId: target.proposal.titleId,
               });
             }
           }

@@ -135,13 +135,18 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     const result = await pool.query(
       `select t.hash, t.raw_name_at_ingest, t.first_seen, count(f.id) as file_count,
               r.id as rule_id, r.season as rule_season, r.numbering as rule_numbering,
-              r.confidence as rule_confidence, r.proposal_reason, r.torrent_name
+              r.sort as rule_sort, r.start_episode as rule_start_episode,
+              r.absolute_offset as rule_absolute_offset, r.exceptions as rule_exceptions,
+              r.confidence as rule_confidence, r.proposal_reason, r.torrent_name,
+              ti.id as title_id, ti.tmdb_id, ti.imdb_id, ti.tvdb_id, ti.name_ru, ti.name_en,
+              ti.year, ti.poster_url
        from torrents t
        left join files f on f.torrent_hash = t.hash and f.is_video = true
        left join rules r on r.torrent_hash = t.hash
+       left join titles ti on ti.id = r.title_id
        where t.status = 'active'
          and (r.id is null or (r.source = 'auto' and (r.title_id is null or r.confidence < $1)))
-       group by t.hash, r.id
+       group by t.hash, r.id, ti.id
        order by t.first_seen desc`,
       [MEDIUM_SCORE_THRESHOLD],
     );
@@ -171,6 +176,31 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
           confidence: row.rule_confidence ?? 0.1,
           why: row.proposal_reason ?? 'Proposal engine not run yet (Milestone 5). Text-extracted defaults.',
           numbering: row.rule_numbering ?? 'parsed',
+          // Full server-computed proposal, so a client can accept it
+          // faithfully (e.g. the Queue's quick-accept) instead of
+          // reconstructing/guessing it -- only meaningful together with
+          // titleId below, since expandRule requires a resolved title to
+          // run at all (see proposeRule.ts).
+          sort: row.rule_sort ?? 'natural',
+          startEpisode: row.rule_start_episode ?? 1,
+          absoluteOffset: row.rule_absolute_offset ?? null,
+          exceptions: row.rule_exceptions ?? {},
+          // Null when the LLM/regex proposal has no resolved title match
+          // yet (or no rule exists at all) -- callers must not fabricate a
+          // title in that case; route to the Labeller instead.
+          titleId: row.title_id ?? null,
+          title: row.title_id
+            ? {
+                id: row.title_id,
+                tmdbId: row.tmdb_id,
+                imdbId: row.imdb_id,
+                tvdbId: row.tvdb_id,
+                nameRu: row.name_ru,
+                nameEn: row.name_en,
+                year: row.year,
+                posterUrl: row.poster_url,
+              }
+            : null,
         },
       };
     });

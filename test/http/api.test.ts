@@ -101,6 +101,80 @@ describe('Admin API - Basic Auth', () => {
   });
 });
 
+describe.skipIf(!hasTestDb)('GET /api/queue (real Postgres)', () => {
+  beforeEach(async () => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+    await truncateAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('includes the full server-computed proposal (numbering/sort/exceptions/titleId) for a queued auto rule with a resolved title match', async () => {
+    // Confidence below MEDIUM_SCORE_THRESHOLD (0.45) with a title_id set --
+    // exactly the "LLM found a title but wasn't confident" queue case a
+    // quick-accept should be able to save verbatim.
+    const title = await pool.query(
+      `insert into titles (name_ru, tmdb_id) values ('Большой куш', 42) returning id`,
+    );
+    const titleId = title.rows[0].id as string;
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen, status)
+       values ('h1', 1001, 'Bolshoy Kush S02', now(), 'active')`,
+    );
+    await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode,
+                           absolute_offset, exceptions, confidence, source, proposal_reason, torrent_name)
+       values ('h1', $1, 2, 'manual', 'natural', 1, null, $2, 0.3, 'auto',
+               'Queued: low confidence', 'Bolshoy Kush S02')`,
+      [titleId, JSON.stringify({ '10': { season: 2, episode: 1 }, '11': 'ignore' })],
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/queue',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(200);
+    const item = (response.json() as { hash: string; proposal: Record<string, unknown> }[]).find(
+      (i) => i.hash === 'h1',
+    );
+    expect(item?.proposal).toMatchObject({
+      proposedSeason: 2,
+      numbering: 'manual',
+      sort: 'natural',
+      startEpisode: 1,
+      absoluteOffset: null,
+      exceptions: { '10': { season: 2, episode: 1 }, '11': 'ignore' },
+      titleId,
+      title: { id: titleId, tmdbId: 42, nameRu: 'Большой куш' },
+    });
+    await app.close();
+  });
+
+  it('leaves titleId/title null for a torrent with no rule at all', async () => {
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen, status)
+       values ('h2', 1002, 'Unruled Show S01', now(), 'active')`,
+    );
+
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/queue',
+      headers: { authorization: authHeader },
+    });
+    const item = (response.json() as { hash: string; proposal: Record<string, unknown> }[]).find(
+      (i) => i.hash === 'h2',
+    );
+    expect(item?.proposal).toMatchObject({ titleId: null, title: null });
+    await app.close();
+  });
+});
+
 describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
   beforeEach(async () => {
     vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
