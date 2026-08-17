@@ -37,6 +37,15 @@ import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
 import { proposeRule } from '../../../resolve/proposeRule.js';
 import { extractEpisodes } from '../../../llm/opencodeZen.js';
 
+const activityQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().optional(),
+});
+
+const feedQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
+});
+
 const saveRuleBodySchema = z.object({
   torrentHash: z.string(),
   season: z.number().int().positive(),
@@ -710,9 +719,12 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // episodes and RuTracker feed matches), newest first. Lite, always-on
   // alternative to the Discord notifications in src/notify/discord.ts --
   // see activityLogRepo.ts and where runIngest calls logActivity.
-  app.get('/activity', async (request, _reply) => {
-    const { limit } = request.query as { limit?: string };
-    const entries = await listRecentActivity(limit !== undefined ? Number(limit) : undefined);
+  app.get('/activity', async (request, reply) => {
+    const parsed = activityQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'limit must be a positive integer' });
+    }
+    const entries = await listRecentActivity(parsed.data.limit);
     return entries;
   });
 
@@ -724,11 +736,16 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // alreadyInLibrary flags an entry whose (title, season, episode) is
   // already mapped, so a human doesn't waste a download on an episode they
   // already have.
-  app.get('/feed', async (request, _reply) => {
-    const { limit, offset } = request.query as { limit?: string; offset?: string };
+  app.get('/feed', async (request, reply) => {
+    const parsed = feedQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'limit must be a positive integer and offset a non-negative integer' });
+    }
     const options: Parameters<typeof listFeedEntries>[0] = {};
-    if (limit !== undefined) options.limit = Number(limit);
-    if (offset !== undefined) options.offset = Number(offset);
+    if (parsed.data.limit !== undefined) options.limit = parsed.data.limit;
+    if (parsed.data.offset !== undefined) options.offset = parsed.data.offset;
     const entries = await listFeedEntries(options);
 
     const matchedTitleIds = [...new Set(entries.map((e) => e.titleId).filter((id): id is string => id !== null))];

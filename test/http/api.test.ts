@@ -1290,6 +1290,72 @@ describe.skipIf(!hasTestDb)('POST /api/feed/:topicId/match (real Postgres)', () 
   });
 });
 
+describe('GET /api/activity and /api/feed - query validation', () => {
+  beforeEach(() => {
+    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
+    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('GET /api/activity?limit=abc returns 400, not 500', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/activity?limit=abc',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('GET /api/activity?limit=-1 returns 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/activity?limit=-1',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('GET /api/feed?limit=abc returns 400, not 500', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed?limit=abc',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('GET /api/feed?offset=abc returns 400, not 500', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed?offset=abc',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('GET /api/feed?offset=-1 returns 400', async () => {
+    const app = build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/feed?offset=-1',
+      headers: { authorization: authHeader },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
 describe('POST /api/ingest/run', () => {
   beforeEach(() => {
     vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
