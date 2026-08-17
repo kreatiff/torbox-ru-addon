@@ -83,6 +83,11 @@ services:
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       # --- Ingest scheduler ---
       INGEST_INTERVAL_MINUTES: ${INGEST_INTERVAL_MINUTES:-15}
+      # --- Inbound TorBox webhook (src/http/routes/webhooks) ---
+      # No default -- unset disables the route entirely (404s), same
+      # reasoning as RUTRACKER_FEED_URLS above. Generate one with:
+      # openssl rand -hex 32
+      TORBOX_WEBHOOK_TOKEN: ${TORBOX_WEBHOOK_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
