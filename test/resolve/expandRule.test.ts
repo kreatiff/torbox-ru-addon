@@ -87,6 +87,29 @@ describe('expandRule', () => {
       const rule: Rule = { ...baseRule, numbering: 'continuous', absoluteOffset: null };
       expect(() => expandRule(rule, [file(1, 'a.mp4')])).toThrow(/absoluteOffset/);
     });
+
+    // A Labeller typo -- absoluteOffset and startEpisode are two separate
+    // manually-entered fields -- can put the offset at or past startEpisode,
+    // which would otherwise silently store a zero/negative episode number
+    // (no DB constraint catches it). Must fail loud instead.
+    it('throws instead of emitting episode 0 when absoluteOffset equals startEpisode', () => {
+      const rule: Rule = { ...baseRule, numbering: 'continuous', startEpisode: 12, absoluteOffset: 12 };
+      expect(() => expandRule(rule, [file(1, 'a.mp4')])).toThrow(/episode 0/);
+    });
+
+    it('throws instead of emitting a negative episode when absoluteOffset exceeds startEpisode', () => {
+      const rule: Rule = { ...baseRule, numbering: 'continuous', startEpisode: 12, absoluteOffset: 20 };
+      expect(() => expandRule(rule, [file(1, 'a.mp4')])).toThrow(/episode -8/);
+    });
+
+    it('still throws (not just for the first file) when only a later file goes non-positive', () => {
+      const rule: Rule = { ...baseRule, numbering: 'continuous', startEpisode: 13, absoluteOffset: 12 };
+      // 3 files sorted -> episodes 1, 2, 3 -- all fine, this is the sanity
+      // check that valid input still doesn't throw.
+      expect(() =>
+        expandRule(rule, [file(1, '13.mp4'), file(2, '14.mp4'), file(3, '15.mp4')]),
+      ).not.toThrow();
+    });
   });
 
   describe('manual', () => {

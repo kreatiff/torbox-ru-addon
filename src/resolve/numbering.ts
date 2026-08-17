@@ -38,13 +38,28 @@ export function expandContinuous(rule: Rule, files: RuleFile[]): Mapping[] {
     throw new Error(`rule ${rule.id}: numbering 'continuous' requires absoluteOffset to be set`);
   }
   const offset = rule.absoluteOffset;
-  return sortFiles(files, rule.sort).map((file, index) => ({
-    fileId: file.id,
-    titleId: rule.titleId,
-    season: rule.season,
-    episode: rule.startEpisode + index - offset,
-    ruleId: rule.id,
-  }));
+  return sortFiles(files, rule.sort).map((file, index) => {
+    const episode = rule.startEpisode + index - offset;
+    // startEpisode is meant to be the absolute number of the first sorted
+    // file (see the doc comment above); an offset at or past that (a
+    // plausible Labeller typo -- absoluteOffset and startEpisode are two
+    // separate manually-entered fields) produces a zero or negative episode
+    // number with nothing else to catch it: no DB constraint, no warning
+    // anywhere downstream. Fail loud here instead, same as expandParsed's
+    // "any file that can't be assigned an episode is a hard failure" below.
+    if (episode < 1) {
+      throw new Error(
+        `rule ${rule.id}: numbering 'continuous' computed episode ${episode} for file ${file.id} (${file.path}) -- startEpisode (${rule.startEpisode}) must be greater than absoluteOffset (${offset})`,
+      );
+    }
+    return {
+      fileId: file.id,
+      titleId: rule.titleId,
+      season: rule.season,
+      episode,
+      ruleId: rule.id,
+    };
+  });
 }
 
 /** exceptions are partitioned out before dispatch (see expandRule.ts); any
