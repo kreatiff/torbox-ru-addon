@@ -396,6 +396,59 @@ describe.skipIf(!hasTestDb)('POST /api/torrents/:hash/preview (real Postgres)', 
 
     await app.close();
   });
+
+  it('falls back to searching TMDB by the English title when the Russian title has no results', async () => {
+    // No existing title in the DB matches either name, and TMDB has zero
+    // results for the Russian title -- only the English one resolves.
+    const torrent = await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h1', 1, 'Неизвестное шоу [S01]', now()) returning hash`,
+    );
+    await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h1', 1, '01.mp4', 1000, true)`,
+    );
+
+    vi.mocked(extractEpisodes).mockResolvedValue({
+      title: 'Неизвестное шоу',
+      titleEn: 'Unknown Show',
+      year: null,
+      season: 1,
+      files: [{ fileId: 1, episode: 1 }],
+      confident: true,
+      reasoning: 'Sequentially numbered files, no ambiguity.',
+    });
+    vi.mocked(searchTitles).mockImplementation(async (query: string) => {
+      if (query === 'Unknown Show') {
+        return [
+          { tmdbId: 555, nameRu: 'Неизвестное шоу', nameEn: 'Unknown Show', year: 2024, posterUrl: null },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(fetchExternalIds).mockResolvedValue({ imdbId: null, tvdbId: null });
+    // The matched title has a tmdbId, so resolveTitleMatch also fetches its
+    // season data -- stub it so this test doesn't care about that, and
+    // clear the call afterwards so it doesn't leak into a later test's
+    // `fetchSeasonDetails).toHaveBeenCalledTimes(...)` assertion.
+    vi.mocked(fetchSeasonDetails).mockResolvedValue([]);
+
+    const app = build();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/torrents/${torrent.rows[0].hash}/preview`,
+      headers: { authorization: authHeader },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.title?.tmdbId).toBe(555);
+    expect(body.title?.nameEn).toBe('Unknown Show');
+
+    vi.mocked(fetchSeasonDetails).mockClear();
+    vi.mocked(searchTitles).mockReset();
+    await app.close();
+  });
 });
 
 describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {

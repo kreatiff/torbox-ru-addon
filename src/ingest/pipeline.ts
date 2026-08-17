@@ -91,7 +91,14 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
     return { title: existing, titleMatch: await toTitleMatch(existing, llm.season) };
   }
 
-  const tmdbResults = await searchTitles(llm.title);
+  // Same title-then-titleEn fallback as the DB lookup above: a
+  // Russian-only LLM title can miss on TMDB (e.g. an obscure or
+  // differently-transliterated Russian search term) even when the
+  // English title would have matched cleanly.
+  let tmdbResults = await searchTitles(llm.title);
+  if (tmdbResults.length === 0 && llm.titleEn) {
+    tmdbResults = await searchTitles(llm.titleEn);
+  }
   const match = pickBestTmdbMatch(tmdbResults, llm.year);
   if (!match) {
     return null;
