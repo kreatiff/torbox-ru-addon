@@ -80,6 +80,16 @@ export const titleRowSchema = z.object({
   year: z.number().int().nullable(),
   aliases: z.array(z.string()),
   poster_url: z.string().nullable().optional(),
+  // Issue #28: cached Kinopoisk enrichment, backfilled opportunistically by
+  // the addon's `meta` route (see src/http/routes/addon/meta.ts) rather
+  // than at ingest/title-creation time -- kinopoisk_checked_at is null
+  // until the first fetch attempt, whatever its outcome.
+  kinopoisk_id: z.number().int().nullable().optional(),
+  kinopoisk_description: z.string().nullable().optional(),
+  kinopoisk_poster_url: z.string().nullable().optional(),
+  kinopoisk_genres: z.array(z.string()).optional(),
+  kinopoisk_cast: z.array(z.string()).optional(),
+  kinopoisk_checked_at: z.date().nullable().optional(),
 });
 export type TitleRow = z.infer<typeof titleRowSchema>;
 

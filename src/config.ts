@@ -17,6 +17,11 @@ const envSchema = z.object({
   NOT_WEB_READY_EXTENSIONS: z.string().default('ts'),
   // --- Milestone 4 (src/ui, admin UI & metadata) ---
   TMDB_API_KEY: z.string().optional(),
+  // --- Kinopoisk-backed `meta` resource (issue #28) ---
+  // kinopoiskapiunofficial.tech token. Optional, same soft-fail shape as
+  // TMDB_API_KEY: without it, the meta route serves without Kinopoisk
+  // enrichment (description/genres/cast) rather than failing.
+  KINOPOISK_API_KEY: z.string().optional(),
   // --- LLM-based auto-proposal (replaces the regex extractor cascade for
   // ingest-time auto-proposals; the cascade itself stays available as a
   // manual Labeller option). Optional: without a key, unruled torrents are
@@ -98,6 +103,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       .map((ext) => ext.trim().toLowerCase())
       .filter((ext) => ext.length > 0),
     tmdbApiKey: parsed.data.TMDB_API_KEY,
+    kinopoiskApiKey: parsed.data.KINOPOISK_API_KEY,
     adminUser: parsed.data.ADMIN_USER,
     adminPass: parsed.data.ADMIN_PASS,
     opencodeZenApiKey: parsed.data.OPENCODE_ZEN_API_KEY,

@@ -12,6 +12,12 @@ export interface Title {
   year: number | null;
   aliases: string[];
   posterUrl: string | null;
+  kinopoiskId: number | null;
+  kinopoiskDescription: string | null;
+  kinopoiskPosterUrl: string | null;
+  kinopoiskGenres: string[];
+  kinopoiskCast: string[];
+  kinopoiskCheckedAt: Date | null;
 }
 
 function toTitle(row: TitleRow): Title {
@@ -25,6 +31,12 @@ function toTitle(row: TitleRow): Title {
     year: row.year,
     aliases: row.aliases,
     posterUrl: row.poster_url ?? null,
+    kinopoiskId: row.kinopoisk_id ?? null,
+    kinopoiskDescription: row.kinopoisk_description ?? null,
+    kinopoiskPosterUrl: row.kinopoisk_poster_url ?? null,
+    kinopoiskGenres: row.kinopoisk_genres ?? [],
+    kinopoiskCast: row.kinopoisk_cast ?? [],
+    kinopoiskCheckedAt: row.kinopoisk_checked_at ?? null,
   };
 }
 
@@ -120,9 +132,21 @@ export async function listMappedTitles(): Promise<CatalogTitle[]> {
   }));
 }
 
-export async function findOrCreateTitle(
-  titleData: Omit<Title, 'id'>,
-): Promise<Title> {
+// Kinopoisk fields are never set at creation time -- they're backfilled
+// opportunistically by setKinopoiskMetadata below (issue #28) -- so callers
+// constructing a new title never need to supply them.
+type NewTitleInput = Omit<
+  Title,
+  | 'id'
+  | 'kinopoiskId'
+  | 'kinopoiskDescription'
+  | 'kinopoiskPosterUrl'
+  | 'kinopoiskGenres'
+  | 'kinopoiskCast'
+  | 'kinopoiskCheckedAt'
+>;
+
+export async function findOrCreateTitle(titleData: NewTitleInput): Promise<Title> {
   // Try TMDB lookup
   if (titleData.tmdbId) {
     const existing = await findByTmdbId(titleData.tmdbId);
@@ -202,6 +226,46 @@ export async function updateTitle(id: string, patch: TitlePatch): Promise<Title 
   return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
 
+export interface KinopoiskMetadataPatch {
+  kinopoiskId: number | null;
+  description: string | null;
+  posterUrl: string | null;
+  genres: string[];
+  cast: string[];
+}
+
+/**
+ * Persists a Kinopoisk enrichment lookup's result -- issue #28's `meta`
+ * route calls this at most once per title (guarded by `kinopoiskCheckedAt`
+ * being null), whether or not a match was actually found, so a title with
+ * no Kinopoisk data isn't re-queried on every Stremio request. Deliberately
+ * a standalone function rather than routed through `updateTitle`/
+ * `TitlePatch`: those are for human-driven Library corrections, this is a
+ * system-managed cache write the admin UI never touches directly.
+ *
+ * `kinopoiskId` collides across two titles only in a genuine data-quality
+ * edge case (the same Kinopoisk film matched from two different library
+ * titles) -- the unique constraint on that column makes that surface as a
+ * raw pg conflict, which the caller (meta.ts) already wraps in a
+ * best-effort try/catch, same as every other Kinopoisk call in that route.
+ */
+export async function setKinopoiskMetadata(
+  titleId: string,
+  patch: KinopoiskMetadataPatch,
+): Promise<void> {
+  await pool.query(
+    `update titles
+     set kinopoisk_id = $2,
+         kinopoisk_description = $3,
+         kinopoisk_poster_url = $4,
+         kinopoisk_genres = $5,
+         kinopoisk_cast = $6,
+         kinopoisk_checked_at = now()
+     where id = $1`,
+    [titleId, patch.kinopoiskId, patch.description, patch.posterUrl, patch.genres, patch.cast],
+  );
+}
+
 export interface TitleWithSeasons extends Title {
   seasons: {
     seasonNumber: number;
@@ -222,7 +286,7 @@ export async function listTitlesWithSeasons(): Promise<TitleWithSeasons[]> {
        where m.title_id = $1
        group by m.season
        order by m.season`,
-      [t.id]
+      [t.id],
     );
 
     const seasons = await Promise.all(
@@ -235,7 +299,7 @@ export async function listTitlesWithSeasons(): Promise<TitleWithSeasons[]> {
           `select episode_count from provider_seasons
            where title_id = $1 and season = $2
            limit 1`,
-          [t.id, seasonNumber]
+          [t.id, seasonNumber],
         );
         const providerRow = providerSeasonResult.rows[0];
         const totalEpisodesCount = providerRow ? parseInt(providerRow.episode_count, 10) : null;
@@ -245,7 +309,7 @@ export async function listTitlesWithSeasons(): Promise<TitleWithSeasons[]> {
           mappedEpisodesCount,
           totalEpisodesCount,
         };
-      })
+      }),
     );
 
     result.push({

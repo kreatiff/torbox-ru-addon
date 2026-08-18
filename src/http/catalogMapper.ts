@@ -50,6 +50,9 @@ export interface MetaPreview {
   poster?: string;
   posterShape: 'poster';
   releaseInfo?: string;
+  description?: string;
+  genres?: string[];
+  cast?: string[];
 }
 
 export interface MetaVideo {
@@ -68,24 +71,50 @@ function padEpisode(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** Catalog-card projection of a title (§5.5-adjacent, issue #20). `poster`
- * is omitted entirely (not `null`) when there is none -- Stremio clients
- * treat a present-but-null poster field inconsistently, an omitted key is
- * unambiguous. */
-export function toMetaPreview(
-  title: Pick<Title, 'id' | 'imdbId' | 'nameRu' | 'nameEn' | 'year' | 'posterUrl'>,
-): MetaPreview {
+type MetaSourceTitle = Pick<
+  Title,
+  | 'id'
+  | 'imdbId'
+  | 'nameRu'
+  | 'nameEn'
+  | 'year'
+  | 'posterUrl'
+  | 'kinopoiskDescription'
+  | 'kinopoiskPosterUrl'
+  | 'kinopoiskGenres'
+  | 'kinopoiskCast'
+>;
+
+/** Catalog-card projection of a title (§5.5-adjacent, issue #20; Kinopoisk
+ * enrichment added in issue #28). `poster`/`description`/`genres`/`cast`
+ * are omitted entirely (not `null`/`[]`) when there's nothing to show --
+ * Stremio clients treat a present-but-empty field inconsistently, an
+ * omitted key is unambiguous. Poster prefers the cached Kinopoisk artwork
+ * over the TMDB-backed `posterUrl` when both exist: Kinopoisk's poster is
+ * the one actually fitted to this library's Russian-language content,
+ * `posterUrl` is the fallback already in place before issue #28. */
+export function toMetaPreview(title: MetaSourceTitle): MetaPreview {
   const preview: MetaPreview = {
     id: stremioIdForTitle(title),
     type: 'series',
     name: title.nameRu || title.nameEn || 'Untitled',
     posterShape: 'poster',
   };
-  if (title.posterUrl) {
-    preview.poster = title.posterUrl;
+  const poster = title.kinopoiskPosterUrl || title.posterUrl;
+  if (poster) {
+    preview.poster = poster;
   }
   if (title.year) {
     preview.releaseInfo = String(title.year);
+  }
+  if (title.kinopoiskDescription) {
+    preview.description = title.kinopoiskDescription;
+  }
+  if (title.kinopoiskGenres.length > 0) {
+    preview.genres = title.kinopoiskGenres;
+  }
+  if (title.kinopoiskCast.length > 0) {
+    preview.cast = title.kinopoiskCast;
   }
   return preview;
 }
@@ -102,7 +131,7 @@ export function toMetaPreview(
  * left undefined/missing entries just omit `released` rather than guessing.
  */
 export function toMetaDetail(
-  title: Pick<Title, 'id' | 'imdbId' | 'nameRu' | 'nameEn' | 'year' | 'posterUrl'>,
+  title: MetaSourceTitle,
   episodes: { season: number; episode: number }[],
   releasedBySeasonEpisode?: Map<string, string | null>,
 ): Meta {
