@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { findByImdbId, findByTmdbId } from '../../../db/repositories/titlesRepo.js';
+import { findByImdbId, findByTmdbId, getTitleById } from '../../../db/repositories/titlesRepo.js';
 import { findMappingsForEpisode } from '../../../db/repositories/mappingsRepo.js';
 import { findByIdsWithTorrent } from '../../../db/repositories/filesRepo.js';
 import { getRuleById } from '../../../db/repositories/rulesRepo.js';
 import { buildStreams } from '../../streamMapper.js';
+import { SYNTHETIC_SCHEME, isValidUuid } from '../../catalogMapper.js';
 
 interface StreamParams {
   type: string;
@@ -14,16 +15,21 @@ const JSON_SUFFIX = '.json';
 
 export type ParsedStreamId =
   | { scheme: 'imdb'; id: string; season: number; episode: number }
-  | { scheme: 'tmdb'; id: number; season: number; episode: number };
+  | { scheme: 'tmdb'; id: number; season: number; episode: number }
+  | { scheme: 'internal'; id: string; season: number; episode: number };
 
 /**
  * §5.5 gives the id shape as "tt1234567:3:8" (IMDb), but real clients don't
  * only send that -- AIOStreams in particular resolves some titles via TMDB
  * instead ("tmdb:250793:3:8"), found verifying this against a real account.
- * Anything that isn't one of these two exact shapes gets a clean empty
- * result from the caller, not an error -- this addon only ever hands out
- * ids of these shapes itself, so a third-party client sending something
- * else isn't malicious, just not something we can resolve.
+ * A third shape, "torboxru:<uuid>:3:8", is this addon's own synthetic id
+ * (issue #20 -- catalogMapper.ts's stremioIdForTitle) for a title with no
+ * imdb_id; it's the id our own `meta` route hands back in `videos[].id`, so
+ * this must stay in sync with toMetaDetail there. Anything that isn't one
+ * of these three exact shapes gets a clean empty result from the caller,
+ * not an error -- this addon only ever hands out ids of these shapes
+ * itself, so a third-party client sending something else isn't malicious,
+ * just not something we can resolve.
  */
 export function parseStreamId(raw: string): ParsedStreamId | null {
   const parts = raw.split(':');
@@ -35,6 +41,15 @@ export function parseStreamId(raw: string): ParsedStreamId | null {
       return null;
     }
     return { scheme: 'tmdb', id, season, episode };
+  }
+  if (parts.length === 4 && parts[0] === SYNTHETIC_SCHEME) {
+    const [, id, seasonRaw, episodeRaw] = parts;
+    const season = Number(seasonRaw);
+    const episode = Number(episodeRaw);
+    if (!id || !isValidUuid(id) || !Number.isInteger(season) || !Number.isInteger(episode)) {
+      return null;
+    }
+    return { scheme: 'internal', id, season, episode };
   }
   if (parts.length === 3) {
     const [imdbId, seasonRaw, episodeRaw] = parts;
@@ -64,7 +79,11 @@ export async function streamRoute(app: FastifyInstance): Promise<void> {
     }
 
     const title =
-      parsed.scheme === 'tmdb' ? await findByTmdbId(parsed.id) : await findByImdbId(parsed.id);
+      parsed.scheme === 'tmdb'
+        ? await findByTmdbId(parsed.id)
+        : parsed.scheme === 'internal'
+          ? await getTitleById(parsed.id)
+          : await findByImdbId(parsed.id);
     if (!title) {
       return { streams: [] };
     }

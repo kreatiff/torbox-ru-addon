@@ -48,8 +48,19 @@ describe('addon routes: manifest + token auth (no DB needed)', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.types).toEqual(['series']);
-    expect(body.resources).toEqual(['stream']);
-    expect(body.idPrefixes).toEqual(['tt', 'tmdb:']);
+    expect(body.resources).toEqual(['stream', 'catalog', 'meta']);
+    expect(body.idPrefixes).toEqual(['tt', 'tmdb:', 'torboxru:']);
+    expect(body.catalogs).toEqual([
+      {
+        type: 'series',
+        id: 'torbox-ru-library',
+        name: 'My TorBox Library',
+        extra: [
+          { name: 'search', isRequired: false },
+          { name: 'skip', isRequired: false },
+        ],
+      },
+    ]);
     await app.close();
   });
 
@@ -87,6 +98,16 @@ describe('parseStreamId (pure, no DB needed)', () => {
     });
   });
 
+  it('parses a torboxru-shaped id -- issue #20\'s synthetic scheme for imdb_id-less titles', () => {
+    const uuid = '11111111-2222-3333-4444-555555555555';
+    expect(parseStreamId(`torboxru:${uuid}:3:8`)).toEqual({
+      scheme: 'internal',
+      id: uuid,
+      season: 3,
+      episode: 8,
+    });
+  });
+
   it.each([
     ['tt1234567', 'too few parts'],
     ['tt1234567:3', 'too few parts'],
@@ -96,6 +117,8 @@ describe('parseStreamId (pure, no DB needed)', () => {
     ['tmdb:x:3:8', 'non-numeric tmdb id'],
     ['tmdb:250793:x:8', 'non-numeric season (tmdb)'],
     [':3:8', 'empty imdb id'],
+    ['torboxru:not-a-uuid:3:8', 'malformed uuid'],
+    ['torboxru:11111111-2222-3333-4444-555555555555:x:8', 'non-numeric season (torboxru)'],
   ])('returns null for %s (%s)', (input) => {
     expect(parseStreamId(input)).toBeNull();
   });
