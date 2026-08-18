@@ -139,6 +139,12 @@ play in a real client — that's this milestone's exact stated success criterion
 above stops just short of it (real resolution to the correct file is confirmed; real video
 decode is not yet explicitly confirmed).
 
+**Post-Milestone-5 follow-up: catalog + meta (issue #20).** The addon gained a browsable "My
+TorBox Library" catalog and its own `meta` resource for titles Cinemeta can't carry — see
+`README.md`'s "Catalog + meta" subsection and `docs/decisions.md`'s dedicated section for the
+design. This deliberately reverses §8's "don't build catalog/meta/synthetic IDs yet" non-goal at
+the repo owner's request.
+
 ## 4. Labeller UI — ✅ done, merged to `dev`
 
 > Queue, labeller, preview table.
