@@ -129,7 +129,8 @@ toolchain is installed.
 No `.env` file needed either way — every variable `app` reads comes through
 plain `${VAR}` interpolation (`TORBOX_API_KEY`, `DATABASE_URL`,
 `TORBOX_REQUEST_DELAY_MS`, `LOG_LEVEL`, `ADDON_TOKEN`, `PUBLIC_BASE`,
-`PORT`, `NOT_WEB_READY_EXTENSIONS`, `ADMIN_USER`, `ADMIN_PASS`,
+`PORT`, `NOT_WEB_READY_EXTENSIONS`,
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `ALLOWED_EMAILS`,
 `TMDB_API_KEY`), not `env_file:`, specifically so a stack UI's own
 "Environment variables" section can supply them.
 
@@ -146,17 +147,20 @@ the stack's **Environment variables** add at minimum:
 TORBOX_API_KEY=<your real key>
 ADDON_TOKEN=<generate with: openssl rand -hex 32>
 PUBLIC_BASE=<https://your-cloudflare-tunnel-hostname>
-ADMIN_USER=<pick a username>
-ADMIN_PASS=<pick a real password>
+GOOGLE_CLIENT_ID=<from Google Cloud OAuth client>
+GOOGLE_CLIENT_SECRET=<from Google Cloud OAuth client>
+SESSION_SECRET=<generate with: openssl rand -base64 32>
+ALLOWED_EMAILS=<your-google-email@example.com>
 ```
 
 `PUBLIC_BASE` is what gets embedded in every stream URL handed to Stremio,
 so it needs to actually be reachable from wherever Stremio/AIOStreams run —
 the Cloudflare Tunnel hostname in production, pointed at the stack's
-exposed port (`PORT`, default 3000). `ADMIN_USER`/`ADMIN_PASS` gate `/admin`
-and `/api` (see "Milestone 4: admin UI" below) — same public-tunnel exposure
-as the addon, so pick a real password, not a placeholder. `TMDB_API_KEY` is
-optional (the Labeller's show picker just returns no results without it).
+exposed port (`PORT`, default 3000). `/admin` and `/api` are gated by Google
+OAuth; only the comma-separated `ALLOWED_EMAILS` addresses can log in. The
+OAuth client's authorized redirect URI must be
+`${PUBLIC_BASE}/auth/google/callback`. `TMDB_API_KEY` is optional (the
+Labeller's show picker just returns no results without it).
 
 If the package is private (GHCR defaults new packages to the repo's
 visibility), either make it public under the repo's _Packages_ tab, or add
@@ -170,12 +174,12 @@ path) at it instead; Portainer clones the repo and builds the image itself
 on `docker compose up`. Same environment variables as Option A.
 
 Either way, everything except `TORBOX_API_KEY`, `ADDON_TOKEN`,
-`PUBLIC_BASE`, `ADMIN_USER`, and `ADMIN_PASS` (`DATABASE_URL`,
-`POSTGRES_USER`/`PASSWORD`/`DB`, `LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`,
-`PORT`, `NOT_WEB_READY_EXTENSIONS`, `TMDB_API_KEY`) has a matching default
-already in the compose file and only needs overriding if you want
-non-default Postgres credentials — in which case set
-`POSTGRES_USER`/`PASSWORD`/`DB` _and_ a `DATABASE_URL` that matches them,
+`PUBLIC_BASE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`,
+and `ALLOWED_EMAILS` (`DATABASE_URL`, `POSTGRES_USER`/`PASSWORD`/`DB`,
+`LOG_LEVEL`, `TORBOX_REQUEST_DELAY_MS`, `PORT`, `NOT_WEB_READY_EXTENSIONS`,
+`TMDB_API_KEY`) has a matching default already in the compose file and only
+needs overriding if you want non-default Postgres credentials — in which case
+set `POSTGRES_USER`/`PASSWORD`/`DB` _and_ a `DATABASE_URL` that matches them,
 since the app connects with the latter, not the three parts. Leaving any of
 the five required variables unset deploys fine but the container exits
 immediately with a clear "... is required" error (`src/config.ts`) — check
@@ -248,12 +252,11 @@ the Status section above and `docs/milestones.md` §3.
 ## Milestone 4: admin UI
 
 A React admin UI at `/admin` (Queue / Labeller / Library / Health tabs) plus
-a JSON API at `/api/*` — both gated independently by HTTP Basic Auth, using
-the same `ADMIN_USER`/`ADMIN_PASS` credentials, no default (like
-`ADDON_TOKEN`, since both surfaces sit behind the same public tunnel as the
-addon). `TMDB_API_KEY` (v3 query-key or v4 Bearer/JWT, either works) is
-optional — without it the Labeller's show picker just returns no results,
-nothing else depends on it.
+a JSON API at `/api/*`. Authentication is Google OAuth: a login page at
+`/admin` redirects through Google, and only addresses in `ALLOWED_EMAILS`
+can obtain a session. There is no registration flow. `TMDB_API_KEY` (v3
+query-key or v4 Bearer/JWT, either works) is optional — without it the
+Labeller's show picker just returns no results, nothing else depends on it.
 
 Rules already mapped and showing in the Library tab are editable, not just
 creatable from the Queue: each rule listed under a season has an **Edit**
@@ -274,10 +277,10 @@ all.
 that's gone from TorBox. The Health tab's "Gone Torrents" and "Dangling
 Mappings" numbers are read-only diagnostics with no delete action attached.
 
-With the server running and a real `ADMIN_USER`/`ADMIN_PASS`:
+With the server running and an authenticated session cookie:
 
 ```
-curl -u "$ADMIN_USER:$ADMIN_PASS" http://localhost:3000/api/queue
+curl -b session=<your-session-cookie> http://localhost:3000/api/queue
 ```
 
 The UI itself is a separate npm workspace (`ui/`) that needs its own install

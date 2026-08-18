@@ -38,7 +38,7 @@ describe.skipIf(!hasTestDb)('play route (real Postgres, mocked TorBox)', () => {
 
   it("redirects to whatever getPlaybackUrl returns, called with TorBox's ids (not our internal ones)", async () => {
     const fileId = await seedFile();
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/play/${fileId}`,
@@ -51,7 +51,7 @@ describe.skipIf(!hasTestDb)('play route (real Postgres, mocked TorBox)', () => {
 
   it('LOCKED (§5.5): never leaks TORBOX_API_KEY anywhere in the response', async () => {
     const fileId = await seedFile();
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/play/${fileId}`,
@@ -63,7 +63,7 @@ describe.skipIf(!hasTestDb)('play route (real Postgres, mocked TorBox)', () => {
 
   it('writes a play_log row for the file (fire-and-forget, so poll for it)', async () => {
     const fileId = await seedFile();
-    const app = build();
+    const app = await build();
     await app.inject({ method: 'GET', url: `/${config.addonToken}/play/${fileId}` });
     await app.close();
 
@@ -74,7 +74,7 @@ describe.skipIf(!hasTestDb)('play route (real Postgres, mocked TorBox)', () => {
   });
 
   it('404s for a file id that does not exist', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/play/999999`,
@@ -85,7 +85,7 @@ describe.skipIf(!hasTestDb)('play route (real Postgres, mocked TorBox)', () => {
   });
 
   it('rejects a non-numeric fileId with 404 rather than an error', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/play/not-a-number`,

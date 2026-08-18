@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import type { FastifyInstance } from 'fastify';
 import { build } from '../../src/http/server.js';
-import { config } from '../../src/config.js';
 import { searchTitles, fetchExternalIds, fetchSeasonDetails } from '../../src/metadata/tmdb.js';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
@@ -11,49 +11,40 @@ vi.mock('../../src/metadata/tmdb.js', () => ({
   fetchSeasonDetails: vi.fn(),
 }));
 
-const authHeader = 'Basic ' + Buffer.from('admin:supersecret').toString('base64');
-
-describe('Admin API - Basic Auth', () => {
-  beforeEach(() => {
-    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
-    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
+function makeSessionCookie(app: FastifyInstance, email = 'admin@example.com') {
+  const session = (app as FastifyInstance & { createSecureSession: (data: object) => object }).createSecureSession({
+    user: { email, name: 'Admin', picture: null },
   });
+  const encoded = (app as FastifyInstance & { encodeSecureSession: (session: object) => string }).encodeSecureSession(session);
+  // @fastify/cookie serializes the value with URL-encoding for characters
+  // such as ';' and '/'. Browsers send the cookie back with that encoding,
+  // so tests must match.
+  return `session=${encodeURIComponent(encoded)}`;
+}
 
+describe('Admin API - session auth', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('rejects requests missing auth header with 401', async () => {
-    const app = build();
+  it('rejects requests without a session cookie with 401', async () => {
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/queue',
     });
     expect(response.statusCode).toBe(401);
-    expect(response.headers['www-authenticate']).toBe('Basic realm="TorBox RU Admin"');
+    expect(response.json()).toEqual({ error: 'Unauthorized' });
     await app.close();
   });
 
-  it('rejects requests with invalid credentials with 401', async () => {
-    const app = build();
+  it('accepts requests with a valid session cookie', async () => {
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/queue',
       headers: {
-        authorization: 'Basic ' + Buffer.from('admin:wrongpassword').toString('base64'),
-      },
-    });
-    expect(response.statusCode).toBe(401);
-    await app.close();
-  });
-
-  it('accepts requests with valid credentials', async () => {
-    const app = build();
-    const response = await app.inject({
-      method: 'GET',
-      url: '/api/queue',
-      headers: {
-        authorization: authHeader,
+        cookie: makeSessionCookie(app),
       },
     });
     // It shouldn't be 401 (if no DB, it might skip/pass or return rows depending on hasTestDb, but not 401)
@@ -62,7 +53,7 @@ describe('Admin API - Basic Auth', () => {
   });
 
   it('routes search query to TMDB client and returns results', async () => {
-    const app = build();
+    const app = await build();
     const mockResults = [
       { tmdbId: 1, nameRu: 'Title', nameEn: 'Title En', year: 2024, posterUrl: null },
     ];
@@ -72,7 +63,7 @@ describe('Admin API - Basic Auth', () => {
       method: 'GET',
       url: '/api/titles/search?query=test',
       headers: {
-        authorization: authHeader,
+        cookie: makeSessionCookie(app),
       },
     });
 
@@ -85,8 +76,6 @@ describe('Admin API - Basic Auth', () => {
 
 describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
   beforeEach(async () => {
-    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
-    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
     await truncateAll();
   });
 
@@ -95,11 +84,11 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
   });
 
   it('returns 404 for a hash that was never ingested', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/torrents/does-not-exist',
-      headers: { authorization: authHeader },
+      headers: { cookie: makeSessionCookie(app) },
     });
     expect(response.statusCode).toBe(404);
     await app.close();
@@ -115,11 +104,11 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
        values ('h1', 2, '10.mp4', 200, true), ('h1', 1, '2.mp4', 100, true)`,
     );
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/torrents/h1',
-      headers: { authorization: authHeader },
+      headers: { cookie: makeSessionCookie(app) },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -146,11 +135,11 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
       [titleId],
     );
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/torrents/h2',
-      headers: { authorization: authHeader },
+      headers: { cookie: makeSessionCookie(app) },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -181,8 +170,6 @@ describe.skipIf(!hasTestDb)('GET /api/torrents/:hash (real Postgres)', () => {
 
 describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
   beforeEach(async () => {
-    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
-    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
     await truncateAll();
     await pool.query(
       `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
@@ -199,11 +186,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
   });
 
   it("rejects numbering 'parsed' with 400 before creating a rule", async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -220,11 +207,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
   });
 
   it('creates a title and rule, then rebuilds mappings for the torrent', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -251,11 +238,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     );
     const titleId = existing.rows[0].id as string;
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -273,11 +260,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
   });
 
   it('editing a rule with the season unchanged updates the same row in place', async () => {
-    const app = build();
+    const app = await build();
     const created = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -293,7 +280,7 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     const edited = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         ruleId,
         torrentHash: 'h1',
@@ -314,11 +301,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
   });
 
   it('editing a rule into a different season deletes the old rule and its mappings instead of leaving them behind', async () => {
-    const app = build();
+    const app = await build();
     const created = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -336,7 +323,7 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     const edited = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         ruleId,
         torrentHash: 'h1',
@@ -370,11 +357,11 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
       { episode: 2, air_date: null },
     ]);
 
-    const app = build();
+    const app = await build();
     const first = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -394,7 +381,7 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
     const second = await app.inject({
       method: 'POST',
       url: '/api/rules',
-      headers: { authorization: authHeader, 'content-type': 'application/json' },
+      headers: { cookie: makeSessionCookie(app), 'content-type': 'application/json' },
       payload: {
         torrentHash: 'h1',
         season: 1,
@@ -412,8 +399,6 @@ describe.skipIf(!hasTestDb)('POST /api/rules (real Postgres)', () => {
 
 describe.skipIf(!hasTestDb)('GET /api/library (real Postgres)', () => {
   beforeEach(async () => {
-    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
-    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
     await truncateAll();
   });
 
@@ -444,11 +429,11 @@ describe.skipIf(!hasTestDb)('GET /api/library (real Postgres)', () => {
       [file.rows[0].id, titleId, rule.rows[0].id],
     );
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/library',
-      headers: { authorization: authHeader },
+      headers: { cookie: makeSessionCookie(app) },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -466,8 +451,6 @@ describe.skipIf(!hasTestDb)('GET /api/library (real Postgres)', () => {
 
 describe.skipIf(!hasTestDb)('GET /api/health (real Postgres)', () => {
   beforeEach(async () => {
-    vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
-    vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
     await truncateAll();
   });
 
@@ -501,11 +484,11 @@ describe.skipIf(!hasTestDb)('GET /api/health (real Postgres)', () => {
       file.rows[0].id,
     ]);
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: '/api/health',
-      headers: { authorization: authHeader },
+      headers: { cookie: makeSessionCookie(app) },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();

@@ -10,7 +10,7 @@ import { build } from './http/server.js';
 // the only way to trigger a run.
 logger.info({ nodeEnv: config.nodeEnv }, 'torbox-ru starting (Milestone 3: addon server)');
 
-const app = build();
+const app = await build();
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'shutting down');

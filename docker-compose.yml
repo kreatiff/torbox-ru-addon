@@ -49,12 +49,11 @@ services:
       PUBLIC_BASE: ${PUBLIC_BASE}
       PORT: ${PORT:-3000}
       NOT_WEB_READY_EXTENSIONS: ${NOT_WEB_READY_EXTENSIONS:-ts}
-      # --- Milestone 4 (src/ui, admin UI & metadata) ---
-      # No defaults for ADMIN_USER/ADMIN_PASS -- same reasoning as
-      # ADDON_TOKEN: a guessable admin password reachable from the same
-      # public tunnel is a real vulnerability, not a convenience.
-      ADMIN_USER: ${ADMIN_USER}
-      ADMIN_PASS: ${ADMIN_PASS}
+      # --- Admin UI authentication (Google OAuth) --------------------------------
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     depends_on:
       postgres:

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../../db/pool.js';
-import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
+import { verifySession } from '../../auth.js';
 import {
   findOrCreateTitle,
   listTitlesWithSeasons,
@@ -52,8 +52,9 @@ const saveRuleBodySchema = z.object({
 });
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
-  // Gated by Basic Auth for all /api endpoints
-  app.addHook('onRequest', verifyBasicAuth);
+  // Gated by session cookie for all /api endpoints. Use preHandler so the
+  // secure-session onRequest hook has already decoded the cookie.
+  app.addHook('preHandler', verifySession);
 
   // GET /api/queue - Torrents needing review
   app.get('/queue', async (_request, _reply) => {
