@@ -368,17 +368,23 @@ gate" section.
 
 This doesn't touch anything already in the library from before the fix. To
 find (and optionally remove) titles that were wrongly auto-added by past
-runs:
+runs, either:
 
-```
-npx tsx --env-file=.env scripts/audit-non-russian-titles.ts            # report only
-npx tsx --env-file=.env scripts/audit-non-russian-titles.ts --delete   # report + delete
-```
+- **Health tab → "Non-Russian Titles Audit"** — click **Scan Library**,
+  review the flagged titles (name, TMDB language, rule/mapping counts),
+  delete individual ones with the trash icon (confirms before deleting).
+- Or the same scan/delete from the CLI:
 
-Dry-run by default. It re-checks every title's *live* TMDB
-`original_language` (nothing is cached), so it needs `TMDB_API_KEY`
-configured; titles with no `tmdb_id` can't be checked this way and are
-skipped.
+  ```
+  npx tsx --env-file=.env scripts/audit-non-russian-titles.ts            # report only
+  npx tsx --env-file=.env scripts/audit-non-russian-titles.ts --delete   # report + delete
+  ```
+
+Both share the same logic (`src/library/nonRussianAudit.ts`) and re-check
+every title's *live* TMDB `original_language` (nothing is cached), so both
+need `TMDB_API_KEY` configured; titles with no `tmdb_id` can't be checked
+this way and are skipped either way. The scan can take a while on a large
+library — one TMDB call per title, throttled.
 
 ## Testing
 

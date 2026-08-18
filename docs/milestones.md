@@ -304,8 +304,11 @@ checked content language (the LLM prompt only describes the *source*, RuTracker;
 `resolveTitleMatch` (`src/ingest/pipeline.ts`) on TMDB's `original_language === 'ru'`; a non-Russian
 match now queues for manual review exactly like any other unresolved match, never creates a title.
 A companion one-off script, `scripts/audit-non-russian-titles.ts`, finds (and optionally deletes)
-titles already wrongly added by past runs. See `docs/decisions.md`'s "Russian-only auto-match gate"
-section and `README.md`'s subsection of the same name.
+titles already wrongly added by past runs — since folded into a shared `src/library/
+nonRussianAudit.ts` module and exposed as a "Non-Russian Titles Audit" panel on the Health tab
+(scan button, results table, per-row delete) so the same cleanup doesn't need the CLI. See
+`docs/decisions.md`'s "Russian-only auto-match gate" section and `README.md`'s subsection of the
+same name.
 
 ## 6. Health screen, ingest scheduling, notifications — ⏳ partially done
 
