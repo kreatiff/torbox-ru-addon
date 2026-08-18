@@ -98,6 +98,20 @@ export async function listAll(): Promise<Title[]> {
   return result.rows.map((row) => toTitle(titleRowSchema.parse(row)));
 }
 
+/**
+ * Deletes a title outright -- used by scripts/audit-non-russian-titles.ts's
+ * `--delete` pass, not by any admin API route (there's no supported way to
+ * delete a title from the Library UI today). The `rules.title_id`
+ * reference has no `on delete cascade`, so this throws a raw FK-violation
+ * pg error if any rule still points at the title; callers that need to
+ * actually remove a title delete its rules first (rulesRepo.deleteRule,
+ * which cascades to mappings) and let that guard stand rather than
+ * duplicating it here.
+ */
+export async function deleteTitle(id: string): Promise<void> {
+  await pool.query('delete from titles where id = $1', [id]);
+}
+
 export interface CatalogTitle extends Title {
   lastMappedAt: Date | null;
 }
