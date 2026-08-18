@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
+import { config } from '../../src/config.js';
 import { runIngest } from '../../src/ingest/pipeline.js';
 import { extractEpisodes } from '../../src/llm/opencodeZen.js';
 import { notifyDiscordEpisodesProcessed } from '../../src/notify/discord.js';
@@ -32,10 +33,23 @@ interface MockTorrent {
   files?: { id: number; name: string; size: number }[];
 }
 
+interface TmdbSearchResultFixture {
+  id: number;
+  name: string;
+  original_name?: string | null;
+  first_air_date?: string | null;
+  poster_path?: string | null;
+  original_language: string;
+}
+
 function stubTorboxApi(opts: {
   mylist: MockTorrent[];
   byId?: Record<number, MockTorrent>;
   feedXml?: string;
+  // Only reached when a test also mocks config.tmdbApiKey truthy -- with no
+  // key, searchTitles soft-fails to [] before ever calling fetch, which is
+  // why every other test here doesn't need this at all.
+  tmdbSearchResults?: TmdbSearchResultFixture[];
 }) {
   vi.stubGlobal(
     'fetch',
@@ -60,6 +74,11 @@ function stubTorboxApi(opts: {
           throw new Error('rutracker feed not stubbed for this test');
         }
         return new Response(opts.feedXml, { status: 200 });
+      }
+      if (url.includes('api.themoviedb.org')) {
+        return new Response(JSON.stringify({ results: opts.tmdbSearchResults ?? [] }), {
+          status: 200,
+        });
       }
       throw new Error(`unexpected fetch in test: ${url}`);
     }),
@@ -182,10 +201,9 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     // as permanently (and silently) fileless.
     const badFiles = await pool.query('select * from files where torrent_hash = $1', ['hash-bad']);
     expect(badFiles.rows).toHaveLength(0);
-    const badTorrent = await pool.query(
-      'select files_fetched_at from torrents where hash = $1',
-      ['hash-bad'],
-    );
+    const badTorrent = await pool.query('select files_fetched_at from torrents where hash = $1', [
+      'hash-bad',
+    ]);
     expect(badTorrent.rows[0].files_fetched_at).toBeNull();
   });
 
@@ -325,7 +343,10 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
       `select source, message from activity_log where source = 'torbox'`,
     );
     expect(activity.rows).toEqual([
-      { source: 'torbox', message: 'Clean Show — S01E01–E02 (2 episodes) processed and added to the library.' },
+      {
+        source: 'torbox',
+        message: 'Clean Show — S01E01–E02 (2 episodes) processed and added to the library.',
+      },
     ]);
   });
 
@@ -341,7 +362,8 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
       season: 2,
       files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
       confident: false,
-      reasoning: 'Declared "5 из 13" but only 6 files are present -- unsure which episodes these are.',
+      reasoning:
+        'Declared "5 из 13" but only 6 files are present -- unsure which episodes these are.',
     }));
     stubTorboxApi({
       mylist: [
@@ -423,6 +445,113 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
     expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }, { episode: 3 }]);
   });
 
+  describe('Russian-only auto-match gate (a torrent whose LLM-guessed title has no existing library match)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('does not create a title, and queues instead, when the best TMDB match is not Russian-language content', async () => {
+      vi.spyOn(config, 'tmdbApiKey', 'get').mockReturnValue('mock-tmdb-key');
+      vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, files) => ({
+        title: 'Breaking Bad',
+        titleEn: null,
+        year: 2008,
+        season: 1,
+        files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+        confident: true,
+        reasoning: 'Files are sequentially numbered with no other episode markers.',
+      }));
+      stubTorboxApi({
+        mylist: [
+          {
+            id: 10,
+            hash: 'hash-en',
+            name: 'rutor.info_Breaking Bad [S01] (2008) WEBRip 1080p',
+            files: [
+              { id: 100, name: '01. Breaking Bad.mp4', size: 1_000_000_000 },
+              { id: 101, name: '02. Breaking Bad.mp4', size: 1_000_000_000 },
+            ],
+          },
+        ],
+        tmdbSearchResults: [
+          {
+            id: 555,
+            name: 'Breaking Bad',
+            original_name: 'Breaking Bad',
+            first_air_date: '2008-01-20',
+            poster_path: null,
+            original_language: 'en',
+          },
+        ],
+      });
+
+      const summary = await runIngest();
+      expect(summary.proposalsCreated).toBe(1);
+      expect(summary.proposalsAutoCommitted).toBe(0);
+      expect(summary.proposalsQueued).toBe(1);
+
+      // The regression this test exists for: no new title, no mappings.
+      const titles = await pool.query(`select name_ru from titles`);
+      expect(titles.rows).toEqual([]);
+
+      const mappings = await pool.query(
+        `select m.episode from mappings m
+         join rules r on r.id = m.rule_id
+         where r.torrent_hash = 'hash-en'`,
+      );
+      expect(mappings.rows).toEqual([]);
+    });
+
+    it('still auto-commits and creates a new title when the best TMDB match is Russian-language content', async () => {
+      vi.spyOn(config, 'tmdbApiKey', 'get').mockReturnValue('mock-tmdb-key');
+      vi.mocked(extractEpisodes).mockImplementation(async (_torrentName, files) => ({
+        title: 'Новое шоу',
+        titleEn: null,
+        year: 2024,
+        season: 1,
+        files: files.map((f, index) => ({ fileId: f.fileId, episode: index + 1 })),
+        confident: true,
+        reasoning: 'Files are sequentially numbered with no other episode markers.',
+      }));
+      stubTorboxApi({
+        mylist: [
+          {
+            id: 11,
+            hash: 'hash-ru',
+            name: 'rutor.info_Новое шоу [S01] (2024) WEBRip 1080p',
+            files: [
+              { id: 110, name: '01. Новое шоу.mp4', size: 1_000_000_000 },
+              { id: 111, name: '02. Новое шоу.mp4', size: 1_000_000_000 },
+            ],
+          },
+        ],
+        tmdbSearchResults: [
+          {
+            id: 666,
+            name: 'Новое шоу',
+            original_name: null,
+            first_air_date: '2024-01-01',
+            poster_path: null,
+            original_language: 'ru',
+          },
+        ],
+      });
+
+      const summary = await runIngest();
+      expect(summary.proposalsAutoCommitted).toBe(1);
+
+      const title = await pool.query(`select name_ru, tmdb_id from titles where tmdb_id = 666`);
+      expect(title.rows).toEqual([{ name_ru: 'Новое шоу', tmdb_id: 666 }]);
+
+      const mappings = await pool.query(
+        `select m.episode from mappings m
+         join rules r on r.id = m.rule_id
+         where r.torrent_hash = 'hash-ru' order by m.episode`,
+      );
+      expect(mappings.rows).toEqual([{ episode: 1 }, { episode: 2 }]);
+    });
+  });
+
   it('polls the RuTracker feed, matches against the library, and upserts feed_entries', async () => {
     await pool.query(`insert into titles (name_ru) values ('Большой куш')`);
     stubTorboxApi({
@@ -448,7 +577,9 @@ describe.skipIf(!hasTestDb)('runIngest (Milestone 1 scope)', () => {
       `select message from activity_log where source = 'rutracker'`,
     );
     expect(activityAfterFirstRun.rows).toHaveLength(5);
-    expect(activityAfterFirstRun.rows.every((r) => r.message.includes('to Большой куш.'))).toBe(true);
+    expect(activityAfterFirstRun.rows.every((r) => r.message.includes('to Большой куш.'))).toBe(
+      true,
+    );
 
     // Second run against the same feed: still matches the same 5 entries,
     // but none of them are new this time -- already-notified rows don't get

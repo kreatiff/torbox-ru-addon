@@ -10,8 +10,17 @@ import {
   markFilesFetched,
   upsertTorrent,
 } from '../db/repositories/torrentsRepo.js';
-import { listVideoFilesForTorrent, upsertFiles, type UpsertFileInput } from '../db/repositories/filesRepo.js';
-import { findOrCreateTitle, findTitleByCleanedName, listAll as listAllTitles, type Title } from '../db/repositories/titlesRepo.js';
+import {
+  listVideoFilesForTorrent,
+  upsertFiles,
+  type UpsertFileInput,
+} from '../db/repositories/filesRepo.js';
+import {
+  findOrCreateTitle,
+  findTitleByCleanedName,
+  listAll as listAllTitles,
+  type Title,
+} from '../db/repositories/titlesRepo.js';
 import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
 import {
   filterExistingTopicIds,
@@ -31,7 +40,12 @@ import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
 import { isVideoFile } from './isVideoFile.js';
 import type { TitleMatch } from '../resolve/confidence.js';
-import { fetchExternalIds, fetchSeasonDetails, searchTitles, type TmdbSearchResult } from '../metadata/tmdb.js';
+import {
+  fetchExternalIds,
+  fetchSeasonDetails,
+  searchTitles,
+  type TmdbSearchResult,
+} from '../metadata/tmdb.js';
 import { extractEpisodes, type LlmExtraction } from '../llm/opencodeZen.js';
 import { fetchFeed, matchEntries } from '../rutracker/index.js';
 
@@ -82,6 +96,17 @@ export interface TitleResolution {
  * `proposeRule`'s provider-season cross-check) so callers that need to show
  * a human the matched show -- e.g. the per-torrent preview endpoint -- have
  * `tmdbId`/`year`/`posterUrl` without a second lookup.
+ *
+ * Only creates a *new* title when TMDB's best match is Russian-language
+ * content (`original_language === 'ru'`) -- this is a Russian-tracker
+ * addon, and nothing upstream of this function (the LLM prompt, the TMDB
+ * search call) actually checks content language, so without this gate a
+ * confidently-extracted English show/torrent on RuTracker gets auto-added
+ * to the library exactly like a real one. A non-Russian best match is
+ * treated the same as "no match at all" -- the torrent still queues for
+ * manual review, it just never becomes a new title. The existing-title
+ * fast path above isn't re-gated: a title already in the library either
+ * predates this check or was vetted by a human.
  */
 export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolution | null> {
   const existing =
@@ -103,6 +128,13 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
   if (!match) {
     return null;
   }
+  if (match.originalLanguage !== 'ru') {
+    logger.info(
+      { tmdbId: match.tmdbId, name: match.nameRu, originalLanguage: match.originalLanguage },
+      'Skipping auto-match: best TMDB result is not Russian-language content',
+    );
+    return null;
+  }
 
   let imdbId: string | null = null;
   let tvdbId: number | null = null;
@@ -112,7 +144,10 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
       imdbId = external.imdbId;
       tvdbId = external.tvdbId;
     } catch (err) {
-      logger.warn({ err, tmdbId: match.tmdbId }, 'Failed to fetch external ids for auto-proposed title');
+      logger.warn(
+        { err, tmdbId: match.tmdbId },
+        'Failed to fetch external ids for auto-proposed title',
+      );
     }
   }
 
@@ -133,7 +168,10 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
 /** When the LLM gave a year, prefer TMDB's top result whose year matches
  * it; otherwise trust TMDB's own top-ranked result. Null only when TMDB
  * returned zero results. */
-function pickBestTmdbMatch(results: TmdbSearchResult[], year: number | null): TmdbSearchResult | null {
+function pickBestTmdbMatch(
+  results: TmdbSearchResult[],
+  year: number | null,
+): TmdbSearchResult | null {
   if (results.length === 0) {
     return null;
   }
@@ -170,7 +208,10 @@ async function fetchTmdbSeason(
       {
         season: cached.season,
         episode_count: cached.episode_count,
-        episodes: cached.episodes.map((e) => ({ episode: e.episode, air_date: e.air_date ?? null })),
+        episodes: cached.episodes.map((e) => ({
+          episode: e.episode,
+          air_date: e.air_date ?? null,
+        })),
       },
     ];
   }
@@ -188,12 +229,18 @@ async function fetchTmdbSeason(
         {
           season: saved.season,
           episode_count: saved.episode_count,
-          episodes: saved.episodes.map((e) => ({ episode: e.episode, air_date: e.air_date ?? null })),
+          episodes: saved.episodes.map((e) => ({
+            episode: e.episode,
+            air_date: e.air_date ?? null,
+          })),
         },
       ];
     }
   } catch (err) {
-    logger.warn({ err, titleId, tmdbId, season }, 'Failed to fetch TMDB season for auto-proposed title');
+    logger.warn(
+      { err, titleId, tmdbId, season },
+      'Failed to fetch TMDB season for auto-proposed title',
+    );
   }
   return [];
 }
@@ -403,7 +450,10 @@ export async function runIngest(): Promise<IngestSummary> {
           files.map((f) => ({ fileId: f.id, path: f.rawPath, size: f.size })),
         );
       } catch (err) {
-        logger.warn({ err, hash: torrent.hash }, 'LLM extraction failed, queuing for manual review');
+        logger.warn(
+          { err, hash: torrent.hash },
+          'LLM extraction failed, queuing for manual review',
+        );
       }
 
       const resolution = llm ? await resolveTitleMatch(llm) : null;
@@ -444,7 +494,10 @@ export async function runIngest(): Promise<IngestSummary> {
               );
             }
           } catch (err) {
-            logger.warn({ err, hash: torrent.hash }, 'auto-proposed rule accepted but rebuild failed');
+            logger.warn(
+              { err, hash: torrent.hash },
+              'auto-proposed rule accepted but rebuild failed',
+            );
             proposalsQueued++;
           }
         } else {
@@ -457,7 +510,10 @@ export async function runIngest(): Promise<IngestSummary> {
     config.opencodeZenRequestDelayMs,
   );
   if (proposalsCreated > 0) {
-    logger.info({ proposalsCreated, proposalsAutoCommitted, proposalsQueued }, 'auto-proposals processed');
+    logger.info(
+      { proposalsCreated, proposalsAutoCommitted, proposalsQueued },
+      'auto-proposals processed',
+    );
   }
 
   if (processedForNotification.length > 0) {

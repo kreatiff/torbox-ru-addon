@@ -289,6 +289,23 @@ interface HealthData {
   recentPlays: RecentPlay[];
 }
 
+interface NonRussianTitle {
+  id: string;
+  nameRu: string;
+  nameEn: string | null;
+  tmdbId: number | null;
+  imdbId: string | null;
+  originalLanguage: string | null;
+  ruleCount: number;
+  mappingCount: number;
+}
+
+interface NonRussianAuditResult {
+  checked: number;
+  total: number;
+  flagged: NonRussianTitle[];
+}
+
 interface ActivityEntry {
   id: number;
   source: 'torbox' | 'rutracker';
@@ -716,6 +733,38 @@ function AdminApp() {
     },
   });
 
+  // Non-Russian Titles audit (Health tab) -- a manually-triggered scan, not
+  // polled automatically like /health: it does one live TMDB call per
+  // title with a tmdb_id, so it can take a while on a large library.
+  // `enabled: false` + `refetch()` (rather than a useMutation wrapping the
+  // same GET) is what lets a successful delete below patch this query's
+  // cached result in place instead of losing the scan on every row delete.
+  const {
+    data: nonRussianAudit,
+    isFetching: isNonRussianAuditFetching,
+    refetch: scanNonRussianTitles,
+    error: nonRussianAuditError,
+  } = useQuery({
+    queryKey: ['nonRussianAudit'],
+    queryFn: () => apiFetch<NonRussianAuditResult>('/api/titles/non-russian-audit'),
+    enabled: false,
+    retry: false,
+  });
+
+  const deleteNonRussianTitle = useMutation({
+    mutationFn: (id: string) => apiFetch<{ success: boolean }>(`/api/titles/${id}`, { method: 'DELETE' }),
+    onSuccess: (_result, id) => {
+      queryClient.setQueryData<NonRussianAuditResult | undefined>(['nonRussianAudit'], (prev) =>
+        prev ? { ...prev, flagged: prev.flagged.filter((f) => f.id !== id) } : prev,
+      );
+      queryClient.invalidateQueries({ queryKey: ['library'] });
+      showToast('Title deleted.');
+    },
+    onError: (err) => {
+      showToast(`Delete failed: ${err.message}`, 'error');
+    },
+  });
+
   // Keyboard navigation listener in Queue
   useEffect(() => {
     if (activeTab !== 'queue' || queue.length === 0) return;
@@ -931,6 +980,11 @@ function AdminApp() {
             purgeGoneTorrents={purgeGoneTorrents}
             activity={activity}
             isActivityLoading={isActivityLoading}
+            nonRussianAudit={nonRussianAudit}
+            isNonRussianAuditFetching={isNonRussianAuditFetching}
+            nonRussianAuditError={nonRussianAuditError}
+            scanNonRussianTitles={scanNonRussianTitles}
+            deleteNonRussianTitle={deleteNonRussianTitle}
           />
         )}
 
@@ -2310,6 +2364,11 @@ interface HealthViewProps {
   purgeGoneTorrents: UseMutationResult<{ success: boolean; deletedCount: number }, Error, void>;
   activity: ActivityEntry[];
   isActivityLoading: boolean;
+  nonRussianAudit: NonRussianAuditResult | undefined;
+  isNonRussianAuditFetching: boolean;
+  nonRussianAuditError: Error | null;
+  scanNonRussianTitles: () => void;
+  deleteNonRussianTitle: UseMutationResult<{ success: boolean }, Error, string>;
 }
 function HealthView({
   health,
@@ -2319,6 +2378,11 @@ function HealthView({
   purgeGoneTorrents,
   activity,
   isActivityLoading,
+  nonRussianAudit,
+  isNonRussianAuditFetching,
+  nonRussianAuditError,
+  scanNonRussianTitles,
+  deleteNonRussianTitle,
 }: HealthViewProps) {
   if (isLoading || !health) return <LoadingState label="Loading health statistics..." />;
 
@@ -2535,6 +2599,92 @@ function HealthView({
                 </div>
               ))}
             </div>
+          )}
+        </div>
+
+        {/* Non-Russian Titles audit (docs/decisions.md's "Russian-only
+            auto-match gate") -- manually triggered, not polled like /health,
+            since it does one live TMDB call per title with a tmdb_id and can
+            take a while. Same scan/delete src/library/nonRussianAudit.ts
+            backs scripts/audit-non-russian-titles.ts too. */}
+        <div className="panel">
+          <div className="panel-header">
+            <h3>Non-Russian Titles Audit</h3>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '4px 10px', fontSize: '11px' }}
+              disabled={isNonRussianAuditFetching}
+              onClick={() => scanNonRussianTitles()}
+            >
+              {isNonRussianAuditFetching ? 'Scanning...' : 'Scan Library'}
+            </button>
+          </div>
+          {nonRussianAuditError ? (
+            <p className="panel-empty">Scan failed: {nonRussianAuditError.message}</p>
+          ) : !nonRussianAudit ? (
+            <p className="panel-empty">
+              Re-checks every title's live TMDB language and flags anything that isn't Russian --
+              catches titles the auto-match pipeline added before it started gating on this. Can
+              take a minute on a large library.
+            </p>
+          ) : nonRussianAudit.flagged.length === 0 ? (
+            <p className="panel-empty">
+              Checked {nonRussianAudit.checked} of {nonRussianAudit.total} title(s) -- none
+              flagged.
+            </p>
+          ) : (
+            <>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                Checked {nonRussianAudit.checked} of {nonRussianAudit.total} title(s) --{' '}
+                {nonRussianAudit.flagged.length} flagged.
+              </p>
+              <div className="table-container" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th>Lang</th>
+                      <th>Rules</th>
+                      <th>Mappings</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nonRussianAudit.flagged.map((t) => (
+                      <tr key={t.id}>
+                        <td>
+                          {t.nameRu}
+                          {t.nameEn ? (
+                            <span style={{ color: 'var(--text-muted)' }}> ({t.nameEn})</span>
+                          ) : null}
+                        </td>
+                        <td className="mono">{t.originalLanguage ?? 'unknown'}</td>
+                        <td>{t.ruleCount}</td>
+                        <td>{t.mappingCount}</td>
+                        <td>
+                          <button
+                            className="icon-btn"
+                            title="Delete this title (and its rules/mappings) from the database"
+                            disabled={deleteNonRussianTitle.isPending}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Delete "${t.nameRu}" and its ${t.ruleCount} rule(s)/${t.mappingCount} mapping(s)? This cannot be undone.`,
+                                )
+                              ) {
+                                deleteNonRussianTitle.mutate(t.id);
+                              }
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
