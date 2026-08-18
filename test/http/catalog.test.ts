@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { hasTestDb, truncateAll } from '../db/testDb.js';
 import { pool } from '../../src/db/pool.js';
 import { config } from '../../src/config.js';
@@ -11,6 +11,40 @@ import {
   parseCatalogExtra,
   matchesSearch,
 } from '../../src/http/catalogMapper.js';
+
+function kinopoiskJson(
+  body: unknown,
+  ok = true,
+  status = 200,
+): { ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> } {
+  return { ok, status, json: async () => body, text: async () => JSON.stringify(body) };
+}
+
+/** Routes the three Kinopoisk endpoints withKinopoiskEnrichment hits
+ * (search-by-imdb, film detail, staff) to canned responses, mirroring the
+ * live shape verified in test/metadata/kinopoisk.test.ts. */
+function mockKinopoiskFetch(kinopoiskId = 326) {
+  return vi.fn().mockImplementation((url: string) => {
+    if (url.includes('/api/v2.2/films?')) {
+      return Promise.resolve(kinopoiskJson({ items: [{ kinopoiskId }] }));
+    }
+    if (url.includes(`/api/v2.2/films/${kinopoiskId}`)) {
+      return Promise.resolve(
+        kinopoiskJson({
+          description: 'Тестовое описание',
+          posterUrl: 'https://example.com/kp-poster.jpg',
+          genres: [{ genre: 'драма' }],
+        }),
+      );
+    }
+    if (url.includes('/api/v1/staff')) {
+      return Promise.resolve(
+        kinopoiskJson([{ nameRu: 'Тестовый актёр', nameEn: null, professionKey: 'ACTOR' }]),
+      );
+    }
+    throw new Error(`unexpected Kinopoisk URL in test: ${url}`);
+  });
+}
 
 describe('catalogMapper (pure, no DB needed)', () => {
   describe('stremioIdForTitle', () => {
@@ -369,7 +403,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
       await app.close();
     });
 
-    it('404s for a tt id -- Cinemeta should win the fallthrough, not our thinner meta', async () => {
+    it('404s for an unknown tt id -- we only answer for titles actually in the library', async () => {
       const app = build();
       const response = await app.inject({
         method: 'GET',
@@ -377,6 +411,130 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
       });
       expect(response.statusCode).toBe(404);
       await app.close();
+    });
+
+    describe('issue #28: serves tt-id titles too, with Kinopoisk enrichment', () => {
+      const originalFetch = global.fetch;
+
+      afterEach(() => {
+        global.fetch = originalFetch;
+        vi.restoreAllMocks();
+      });
+
+      it("serves meta for a tt-id title, reversing #20's Cinemeta-wins default", async () => {
+        await seedMappedTitle({
+          nameRu: 'Show With Imdb',
+          hash: 'h1',
+          imdbId: 'tt2000001',
+          season: 1,
+          episode: 1,
+        });
+        const app = build();
+        const response = await app.inject({
+          method: 'GET',
+          url: `/${config.addonToken}/meta/series/tt2000001.json`,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().meta.id).toBe('tt2000001');
+        await app.close();
+      });
+
+      it('enriches from Kinopoisk on the first request, then serves from cache without refetching', async () => {
+        vi.spyOn(config, 'kinopoiskApiKey', 'get').mockReturnValue('mock-key');
+        const fetchSpy = mockKinopoiskFetch();
+        global.fetch = fetchSpy;
+
+        await seedMappedTitle({
+          nameRu: 'Enriched Show',
+          hash: 'h1',
+          imdbId: 'tt2000002',
+          season: 1,
+          episode: 1,
+        });
+        const app = build();
+        const url = `/${config.addonToken}/meta/series/tt2000002.json`;
+
+        const first = await app.inject({ method: 'GET', url });
+        expect(first.statusCode).toBe(200);
+        expect(first.json().meta).toMatchObject({
+          description: 'Тестовое описание',
+          genres: ['драма'],
+          cast: ['Тестовый актёр'],
+          poster: 'https://example.com/kp-poster.jpg',
+        });
+        const callsAfterFirst = fetchSpy.mock.calls.length;
+        expect(callsAfterFirst).toBeGreaterThan(0);
+
+        const second = await app.inject({ method: 'GET', url });
+        expect(second.statusCode).toBe(200);
+        expect(second.json().meta.description).toBe('Тестовое описание');
+        expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst);
+
+        await app.close();
+      });
+
+      it('serves meta without enrichment (never a 500) when the Kinopoisk fetch fails', async () => {
+        vi.spyOn(config, 'kinopoiskApiKey', 'get').mockReturnValue('mock-key');
+        global.fetch = vi.fn().mockRejectedValue(new Error('network down'));
+
+        await seedMappedTitle({
+          nameRu: 'Unreachable Kinopoisk Show',
+          hash: 'h1',
+          imdbId: 'tt2000003',
+          season: 1,
+          episode: 1,
+        });
+        const app = build();
+        const response = await app.inject({
+          method: 'GET',
+          url: `/${config.addonToken}/meta/series/tt2000003.json`,
+        });
+        expect(response.statusCode).toBe(200);
+        const meta = response.json().meta;
+        expect(meta.description).toBeUndefined();
+        expect(meta.videos).toHaveLength(1);
+        await app.close();
+      });
+
+      it('never attempts a Kinopoisk fetch for a title with no imdb_id', async () => {
+        vi.spyOn(config, 'kinopoiskApiKey', 'get').mockReturnValue('mock-key');
+        const fetchSpy = vi.fn();
+        global.fetch = fetchSpy;
+
+        const { titleId } = await seedMappedTitle({
+          nameRu: 'No Imdb Show',
+          hash: 'h1',
+          tmdbId: 777,
+          season: 1,
+          episode: 1,
+        });
+        const app = build();
+        const response = await app.inject({
+          method: 'GET',
+          url: `/${config.addonToken}/meta/series/torboxru:${titleId}.json`,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        await app.close();
+      });
+
+      it('resolves a tmdb:-shaped meta id the same as stream.ts does', async () => {
+        await seedMappedTitle({
+          nameRu: 'Tmdb Only Show',
+          hash: 'h1',
+          tmdbId: 888,
+          season: 1,
+          episode: 1,
+        });
+        const app = build();
+        const response = await app.inject({
+          method: 'GET',
+          url: `/${config.addonToken}/meta/series/tmdb:888.json`,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().meta.videos).toHaveLength(1);
+        await app.close();
+      });
     });
 
     it('404s (not 500) for a malformed uuid', async () => {
