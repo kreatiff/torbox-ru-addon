@@ -297,6 +297,16 @@ HIGH threshold was tuned from 0.75 to 0.70 during implementation so the real 10-
 **Detailed build plan:** see [`docs/milestone5-plan.md`](./milestone5-plan.md) — module-by-module
 breakdown; the sign-offs that were blocking it are now resolved and recorded in `decisions.md`.
 
+**Post-launch fix: Russian-only auto-match gate.** The repo owner reported the LLM step was
+matching and auto-adding English-language shows to the library — nothing in the pipeline had ever
+checked content language (the LLM prompt only describes the *source*, RuTracker; TMDB's own
+`original_language` field was fetched but silently dropped). Fixed by gating title creation in
+`resolveTitleMatch` (`src/ingest/pipeline.ts`) on TMDB's `original_language === 'ru'`; a non-Russian
+match now queues for manual review exactly like any other unresolved match, never creates a title.
+A companion one-off script, `scripts/audit-non-russian-titles.ts`, finds (and optionally deletes)
+titles already wrongly added by past runs. See `docs/decisions.md`'s "Russian-only auto-match gate"
+section and `README.md`'s subsection of the same name.
+
 ## 6. Health screen, ingest scheduling, notifications — ⏳ partially done
 
 > (no additional quote — §6 names this milestone in four words)

@@ -355,6 +355,31 @@ stage) — this manual step is only needed for local development without
 Docker. Without a build present, `/admin/*` 404s with a clear message rather
 than failing silently (`src/http/routes/admin/index.ts`).
 
+### Russian-only auto-match
+
+The LLM auto-proposal step (OpenCode Zen) that turns a newly-ingested
+torrent into a Library title now only auto-creates a title when TMDB's
+`original_language` for the best match is `"ru"` — this is a Russian-tracker
+addon, and without this gate a confidently-extracted English show/movie on
+RuTracker got auto-added exactly like a real one. A non-Russian match just
+queues the torrent for manual review, same as any other unresolved match —
+nothing new is created. See `docs/decisions.md`'s "Russian-only auto-match
+gate" section.
+
+This doesn't touch anything already in the library from before the fix. To
+find (and optionally remove) titles that were wrongly auto-added by past
+runs:
+
+```
+npx tsx --env-file=.env scripts/audit-non-russian-titles.ts            # report only
+npx tsx --env-file=.env scripts/audit-non-russian-titles.ts --delete   # report + delete
+```
+
+Dry-run by default. It re-checks every title's *live* TMDB
+`original_language` (nothing is cached), so it needs `TMDB_API_KEY`
+configured; titles with no `tmdb_id` can't be checked this way and are
+skipped.
+
 ## Testing
 
 ```
