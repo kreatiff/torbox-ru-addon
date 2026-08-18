@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../../db/pool.js';
 import { config } from '../../../config.js';
-import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
+import { verifySession } from '../../auth.js';
 import {
   findOrCreateTitle,
   getTitleById,
@@ -129,8 +129,9 @@ function renderDownloadResultHtml(success: boolean, message: string): string {
 }
 
 export async function apiRoutes(app: FastifyInstance): Promise<void> {
-  // Gated by Basic Auth for all /api endpoints
-  app.addHook('onRequest', verifyBasicAuth);
+  // Gated by session cookie for all /api endpoints. Use preHandler so the
+  // secure-session onRequest hook has already decoded the cookie.
+  app.addHook('preHandler', verifySession);
 
   // GET /api/queue - Torrents needing review
   app.get('/queue', async (_request, _reply) => {
@@ -906,13 +907,12 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/feed/:topicId/download - same action, reachable as a plain
   // clickable link (the Discord notification's download link uses this --
   // a Discord embed link can only ever issue a GET). Still gated by the
-  // same Basic Auth as every other /api route: the browser prompts for the
-  // admin credentials on first click, same as opening /admin. Deliberately
-  // mutates on GET rather than being REST-pure, because a clickable link
-  // can't issue a POST -- mitigated by being both auth-gated and
-  // idempotent (downloadFeedEntry short-circuits if already downloaded),
-  // so an accidental re-fetch (e.g. a link-preview bot, if one ever got
-  // past the auth gate) is harmless rather than compounding.
+  // same session cookie as every other /api route. Deliberately mutates on
+  // GET rather than being REST-pure, because a clickable link can't issue a
+  // POST -- mitigated by being both auth-gated and idempotent
+  // (downloadFeedEntry short-circuits if already downloaded), so an
+  // accidental re-fetch (e.g. a link-preview bot, if one ever got past the
+  // auth gate) is harmless rather than compounding.
   app.get('/feed/:topicId/download', async (request, reply) => {
     const { topicId } = request.params as { topicId: string };
     const id = Number(topicId);

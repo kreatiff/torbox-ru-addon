@@ -27,7 +27,11 @@ import {
   Box,
   Loader2,
   Pencil,
+  LogOut,
 } from 'lucide-react';
+import { AuthProvider, LoginPage } from './auth.js';
+import { useAuth } from './useAuth.js';
+import { apiFetch } from './api.js';
 
 // Import the pure expandRule function and types from our backend src. Only
 // resolve/{expandRule,types}.ts qualify for this -- they're genuinely
@@ -349,29 +353,6 @@ const queryClient = new QueryClient({
   },
 });
 
-// Base fetcher helper.
-// No Authorization header is injected here: the browser's native Basic Auth dialog
-// (triggered by the WWW-Authenticate: Basic response from the server) handles credential
-// storage and automatically re-sends them on every request under /admin and /api.
-async function apiFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, options);
-  if (!res.ok) {
-    // Routes like POST/PATCH /api/titles return a JSON {error: "..."} body
-    // with their non-2xx status (e.g. 409 on a provider-id conflict) --
-    // surface that specific message instead of the generic status text
-    // whenever the body parses as JSON with one.
-    let detail = res.statusText;
-    try {
-      const body = (await res.clone().json()) as { error?: string };
-      if (typeof body.error === 'string') detail = body.error;
-    } catch {
-      // Non-JSON error body -- fall back to statusText above.
-    }
-    throw new Error(`API error: ${detail} (${res.status})`);
-  }
-  return res.json() as Promise<T>;
-}
-
 // Majority-script homoglyph detector and renderer
 function highlightHomoglyphs(name: string): React.ReactNode {
   // Split name by word boundaries to run token-based analysis
@@ -526,6 +507,7 @@ interface ToastMessage {
 
 function AdminApp() {
   const queryClient = useQueryClient();
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<TabId>(getInitialTab);
 
   // Keeps the URL's ?tab= param in sync with the active tab (replaceState,
@@ -917,6 +899,31 @@ function AdminApp() {
                 minute: '2-digit',
               })}
             </span>
+          )}
+          {user && (
+            <>
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--text-dim)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: '100%',
+                }}
+                title={user.email}
+              >
+                {user.email}
+              </span>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '11px', width: '100%' }}
+                onClick={() => logout()}
+              >
+                <LogOut size={12} style={{ marginRight: '6px' }} />
+                Sign out
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -2854,10 +2861,39 @@ function FeedMatchPicker({ library, onSelect, disabled }: FeedMatchPickerProps) 
   );
 }
 
+function AppContent() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'var(--bg-main)',
+          color: 'var(--text-muted)',
+        }}
+      >
+        Loading...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
+
+  return <AdminApp />;
+}
+
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AdminApp />
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AppContent />
+      </QueryClientProvider>
+    </AuthProvider>
   );
 }

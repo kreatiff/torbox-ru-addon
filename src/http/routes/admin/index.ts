@@ -3,7 +3,6 @@ import fastifyStatic from '@fastify/static';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,11 +37,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       'Admin UI build not found -- /admin/* will 404 until `npm run build` runs inside ui/ (or the Docker image is rebuilt).',
     );
   }
-
-  // Gate administrative interface with HTTP Basic Auth, regardless of
-  // whether the UI build exists -- don't leak "the build is missing" to an
-  // unauthenticated prober either.
-  app.addHook('onRequest', verifyBasicAuth);
 
   if (uiBuildExists) {
     // Serve static assets. Because this plugin is registered with prefix '/admin',

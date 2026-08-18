@@ -20,7 +20,7 @@ describe('POST /webhooks/torbox/:token', () => {
 
   it('404s when TORBOX_WEBHOOK_TOKEN is unset, regardless of the token supplied', async () => {
     vi.spyOn(config, 'torboxWebhookToken', 'get').mockReturnValue(undefined);
-    const app = build();
+    const app = await build();
 
     const response = await app.inject({ method: 'POST', url: '/webhooks/torbox/anything' });
 
@@ -31,7 +31,7 @@ describe('POST /webhooks/torbox/:token', () => {
 
   it('404s on a wrong token', async () => {
     vi.spyOn(config, 'torboxWebhookToken', 'get').mockReturnValue('correct-token');
-    const app = build();
+    const app = await build();
 
     const response = await app.inject({ method: 'POST', url: '/webhooks/torbox/wrong-token' });
 
@@ -42,7 +42,7 @@ describe('POST /webhooks/torbox/:token', () => {
 
   it('accepts a correct token, acks 200, and triggers a deduped ingest run', async () => {
     vi.spyOn(config, 'torboxWebhookToken', 'get').mockReturnValue('correct-token');
-    const app = build();
+    const app = await build();
 
     const response = await app.inject({
       method: 'POST',
@@ -62,7 +62,7 @@ describe('POST /webhooks/torbox/:token', () => {
 
   it('does not reject an unparseable / non-JSON body -- the payload shape is never load-bearing', async () => {
     vi.spyOn(config, 'torboxWebhookToken', 'get').mockReturnValue('correct-token');
-    const app = build();
+    const app = await build();
 
     const response = await app.inject({
       method: 'POST',
@@ -84,7 +84,7 @@ describe('POST /webhooks/torbox/:token', () => {
         resolveIngest = () => resolve({} as never);
       }),
     );
-    const app = build();
+    const app = await build();
 
     const response = await app.inject({
       method: 'POST',

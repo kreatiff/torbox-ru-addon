@@ -29,12 +29,14 @@ const envSchema = z.object({
   OPENCODE_ZEN_API_KEY: z.string().optional(),
   OPENCODE_ZEN_MODEL: z.string().default('deepseek-v4-flash-free'),
   OPENCODE_ZEN_REQUEST_DELAY_MS: z.coerce.number().int().nonnegative().default(1000),
-  // No default: this gates the entire admin surface (rule creation, ingest
-  // trigger, library/health data) behind HTTP Basic Auth, reachable from the
-  // same public Cloudflare Tunnel as the addon. A guessable default here
-  // defeats that gate entirely -- same reasoning as ADDON_TOKEN above.
-  ADMIN_USER: z.string().min(1, 'ADMIN_USER is required'),
-  ADMIN_PASS: z.string().min(1, 'ADMIN_PASS is required'),
+  // --- Admin UI authentication (Google OAuth) --------------------------------
+  // Replaces HTTP Basic Auth. The app runs a standard OAuth 2.0 authorization
+  // code flow with Google; only emails in ALLOWED_EMAILS may obtain a session.
+  // SESSION_SECRET is used to encrypt the session cookie (must be >= 32 bytes).
+  GOOGLE_CLIENT_ID: z.string().min(1, 'GOOGLE_CLIENT_ID is required'),
+  GOOGLE_CLIENT_SECRET: z.string().min(1, 'GOOGLE_CLIENT_SECRET is required'),
+  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 bytes'),
+  ALLOWED_EMAILS: z.string().min(1, 'ALLOWED_EMAILS is required'),
   // --- RuTracker feed scraper (docs/rutracker-scraper-plan.md) ---
   // Comma-separated Atom feed URLs. No default: an unset value forces the
   // consumer to fall back to the hardcoded constant inside fetchFeed.ts --
@@ -104,11 +106,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       .filter((ext) => ext.length > 0),
     tmdbApiKey: parsed.data.TMDB_API_KEY,
     kinopoiskApiKey: parsed.data.KINOPOISK_API_KEY,
-    adminUser: parsed.data.ADMIN_USER,
-    adminPass: parsed.data.ADMIN_PASS,
     opencodeZenApiKey: parsed.data.OPENCODE_ZEN_API_KEY,
     opencodeZenModel: parsed.data.OPENCODE_ZEN_MODEL,
     opencodeZenRequestDelayMs: parsed.data.OPENCODE_ZEN_REQUEST_DELAY_MS,
+    googleClientId: parsed.data.GOOGLE_CLIENT_ID,
+    googleClientSecret: parsed.data.GOOGLE_CLIENT_SECRET,
+    sessionSecret: parsed.data.SESSION_SECRET,
+    allowedEmails: parsed.data.ALLOWED_EMAILS.split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter((email) => email.length > 0),
     rutrackerFeedUrls: parsed.data.RUTRACKER_FEED_URLS
       ? parsed.data.RUTRACKER_FEED_URLS.split(',')
           .map((url) => url.trim())

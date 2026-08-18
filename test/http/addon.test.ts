@@ -40,7 +40,7 @@ async function seedEpisode(options: SeedOptions = {}): Promise<{ imdbId: string;
 
 describe('addon routes: manifest + token auth (no DB needed)', () => {
   it('serves a series-only manifest for a valid token', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/manifest.json`,
@@ -65,14 +65,14 @@ describe('addon routes: manifest + token auth (no DB needed)', () => {
   });
 
   it('LOCKED (§5.5): rejects a wrong token with 404, not 401/403', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({ method: 'GET', url: '/wrong-token/manifest.json' });
     expect(response.statusCode).toBe(404);
     await app.close();
   });
 
   it('rejects a request missing the token segment entirely with 404', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({ method: 'GET', url: '/manifest.json' });
     expect(response.statusCode).toBe(404);
     await app.close();
@@ -135,7 +135,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
 
   it('resolves a mapped episode to a stream pointing at /play/:fileId', async () => {
     const { imdbId, fileId } = await seedEpisode();
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/${imdbId}:3:1.json`,
@@ -154,7 +154,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
 
   it('flags a low-confidence mapping with ⚠ in the description', async () => {
     const { imdbId } = await seedEpisode({ confidence: 0.5 });
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/${imdbId}:3:1.json`,
@@ -185,7 +185,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
       [file.rows[0].id, titleId, rule.rows[0].id],
     );
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/tt7654321:1:1.json`,
@@ -219,7 +219,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
       [file.rows[0].id, titleId, rule.rows[0].id],
     );
 
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/tmdb:${tmdbId}:3:3.json`,
@@ -230,7 +230,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
   });
 
   it('returns an empty stream list for an unknown imdb id', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/tt9999999:1:1.json`,
@@ -242,7 +242,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
 
   it('returns an empty stream list for a known title with no mapping for that episode', async () => {
     const { imdbId } = await seedEpisode();
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/${imdbId}:3:99.json`,
@@ -252,7 +252,7 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
   });
 
   it('404s for a type other than series -- out of contract, not just "no results"', async () => {
-    const app = build();
+    const app = await build();
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/movie/tt1234567.json`,

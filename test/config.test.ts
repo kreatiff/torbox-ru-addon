@@ -7,8 +7,10 @@ function baseEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     TORBOX_API_KEY: 'torbox-key',
     ADDON_TOKEN: 'addon-token',
     PUBLIC_BASE: 'https://example.com',
-    ADMIN_USER: 'admin',
-    ADMIN_PASS: 'password',
+    GOOGLE_CLIENT_ID: 'google-client-id',
+    GOOGLE_CLIENT_SECRET: 'google-client-secret',
+    SESSION_SECRET: 'a-very-long-secret-key-for-session-cookies',
+    ALLOWED_EMAILS: 'admin@example.com',
     ...overrides,
   };
 }

@@ -54,14 +54,14 @@ export const defaultMaskConfig: MaskConfig = {
 /** Builds a regex that matches quality/codec tokens as whole words. */
 export function buildQualityCodecRegex(config: MaskConfig = defaultMaskConfig): RegExp {
   const tokens = config.qualityCodecTokens.map(escapeRegex);
-  return new RegExp(`\\b(?:${tokens.join('|')})\\b`, 'i');
+  return new RegExp(`\\b(?:${tokens.join('|')})\\b`, 'gi');
 }
 
 /** Builds a regex that matches release-group markers. */
 export function buildReleaseGroupRegex(config: MaskConfig = defaultMaskConfig): RegExp {
   const groups = config.releaseGroups.map(escapeRegex);
   // "by.Nicodem" and literal group names
-  return new RegExp(`(?:by\\.\\w+|${groups.join('|')})`, 'i');
+  return new RegExp(`(?:by\\.\\w+|${groups.join('|')})`, 'gi');
 }
 
 function escapeRegex(s: string): string {

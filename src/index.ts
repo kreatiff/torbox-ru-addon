@@ -12,7 +12,7 @@ import { startIngestScheduler } from './ingest/scheduler.js';
 // alongside the scheduler, not instead of it.
 logger.info({ nodeEnv: config.nodeEnv }, 'torbox-ru starting');
 
-const app = build();
+const app = await build();
 let scheduler: { stop: () => void } | undefined;
 
 async function shutdown(signal: string): Promise<void> {
