@@ -44,11 +44,27 @@ COPY tsconfig.base.json tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
+# Third application of the same $BUILDPLATFORM fix as ui-build/build above --
+# this exact `npm ci --omit=dev` is what actually crashed with "qemu:
+# uncaught target signal 4" in a real dev-push run. The earlier
+# --ignore-scripts decision (docs/decisions.md) reasoned this stage was
+# already safe since --omit=dev excludes devDependencies (esbuild/rollup,
+# the packages whose install-time binaries triggered the earlier crashes)
+# -- that assumption didn't hold in practice, even with production
+# dependencies unchanged. node_modules for this dependency tree is pure JS
+# (no pg-native, no other native/arch-specific addons -- see the top-of-file
+# comment), so it's architecture-independent and safe to install natively
+# and copy in, same as the compiled dist/ output from the other two stages.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json ./
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=ui-build /app/dist/ui ./dist/ui
 COPY migrations ./migrations
