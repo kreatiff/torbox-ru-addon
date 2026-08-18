@@ -145,6 +145,16 @@ TorBox Library" catalog and its own `meta` resource for titles Cinemeta can't ca
 design. This deliberately reverses §8's "don't build catalog/meta/synthetic IDs yet" non-goal at
 the repo owner's request.
 
+**Further follow-up: Kinopoisk-backed `meta` (issue #28).** `/meta` now answers for every mapped
+title, not just imdb_id-less ones, and serves real Russian-language description/genres/cast from
+Kinopoisk (`kinopoiskapiunofficial.tech`, verified live during implementation) instead of
+Cinemeta's English or missing metadata — a deliberate reversal of issue #20's own "let Cinemeta
+win for `tt` ids" decision, again at the repo owner's explicit request. Enrichment is lazy and
+cached forever per title (`titles.kinopoisk_checked_at`), optional (`KINOPOISK_API_KEY` unset ->
+soft no-op, same shape as `TMDB_API_KEY`), and best-effort (a Kinopoisk failure never turns into a
+500). See `README.md`'s "Kinopoisk-backed meta" subsection and `docs/decisions.md`'s dedicated
+section.
+
 ## 4. Labeller UI — ✅ done, merged to `dev`
 
 > Queue, labeller, preview table.

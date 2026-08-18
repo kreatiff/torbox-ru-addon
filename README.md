@@ -258,17 +258,43 @@ GET /:token/meta/series/:idJson
 
 The catalog lists every title with at least one mapped file, newest-mapped
 first, with `search` and `skip` (Discover pagination) as optional extras. A
-title with an `imdb_id` is advertised as `tt…` so Stremio's built-in
-Cinemeta still supplies its richer metadata; a title with none falls back
-to this addon's own `torboxru:<uuid>` id and its own `/meta` route for the
-episode list, since Cinemeta has nothing to show for it otherwise. See
-`docs/decisions.md`'s "Stremio catalog + meta" section for the full design.
+title with an `imdb_id` is advertised as `tt…`; a title with none falls
+back to this addon's own `torboxru:<uuid>` id. Either way, `/meta` is what
+serves that title's episode list and description (see "Kinopoisk-backed
+meta" below — as of issue #28, that response is no longer Cinemeta's).
+See `docs/decisions.md`'s "Stremio catalog + meta" section for the full
+design.
 
 **If you already have this addon installed, you need to reinstall it** for
 the catalog to show up — Stremio caches a manifest per addon version, and
 it doesn't reliably notice the bump on its own. Remove the addon and re-add
 the same manifest URL; the library then appears under Discover → Series →
 "My TorBox Library".
+
+### Kinopoisk-backed `meta` (issue #28): real Russian descriptions, not Cinemeta's
+
+`/meta` now answers for **every** title this library maps — `tt…` and
+`tmdb:…` ids included, not just the `torboxru:<uuid>` ones issue #20
+originally scoped it to. This is a deliberate reversal of that earlier
+"let Cinemeta win for `tt` ids" decision: the point of this feature is
+Russian-language description/genres/cast in place of Cinemeta's English
+(or missing) ones, so this addon's own answer needs to win for every
+mapped title. See `docs/decisions.md`'s "Kinopoisk-backed meta" section
+for the full reasoning, including the accepted tradeoff (this addon now
+also gets probed for `meta` on shows outside its library — a cheap,
+null-returning lookup, same shape `stream.ts` already handles for unknown
+stream ids).
+
+Set `KINOPOISK_API_KEY` (a [kinopoiskapiunofficial.tech](https://kinopoiskapiunofficial.tech)
+token) to enable it — optional, same soft-fail shape as `TMDB_API_KEY`:
+without it, `/meta` still works, just without the enrichment fields. When
+set, the **first** `/meta` request for a title with an `imdb_id` triggers
+one Kinopoisk lookup (cached in `titles.kinopoisk_*` forever after, whether
+or not a match was found) — every later request for that title is a plain
+DB read, no repeat API calls. Titles with no `imdb_id` at all aren't
+enriched in this pass (Kinopoisk's one reliable cross-reference here is
+by-imdb-id search; see `docs/decisions.md` for why keyword matching wasn't
+used instead).
 
 ## Milestone 4: admin UI
 
