@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../../db/pool.js';
+import { config } from '../../../config.js';
 import { verifyBasicAuth } from '../../hooks/verifyBasicAuth.js';
 import {
   findOrCreateTitle,
@@ -36,6 +37,7 @@ import { naturalCompare } from '../../../extract/naturalSort.js';
 import { MEDIUM_SCORE_THRESHOLD } from '../../../resolve/confidence.js';
 import { proposeRule } from '../../../resolve/proposeRule.js';
 import { extractEpisodes } from '../../../llm/opencodeZen.js';
+import { findNonRussianTitles, deleteTitleWithRules } from '../../../library/nonRussianAudit.js';
 
 const activityQuerySchema = z.object({
   limit: z.coerce.number().int().positive().optional(),
@@ -171,10 +173,12 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
         fileCount: parseInt(row.file_count, 10),
         ruleId: row.rule_id ?? null,
         proposal: {
-          proposedTitle: row.proposal_reason ? row.torrent_name ?? proposedTitle : proposedTitle,
+          proposedTitle: row.proposal_reason ? (row.torrent_name ?? proposedTitle) : proposedTitle,
           proposedSeason,
           confidence: row.rule_confidence ?? 0.1,
-          why: row.proposal_reason ?? 'Proposal engine not run yet (Milestone 5). Text-extracted defaults.',
+          why:
+            row.proposal_reason ??
+            'Proposal engine not run yet (Milestone 5). Text-extracted defaults.',
           numbering: row.rule_numbering ?? 'parsed',
           // Full server-computed proposal, so a client can accept it
           // faithfully (e.g. the Queue's quick-accept) instead of
@@ -426,7 +430,10 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
         imdbId = imdbId ?? resolved.imdbId;
         tvdbId = tvdbId ?? resolved.tvdbId;
       } catch (err) {
-        app.log.warn({ err, tmdbId, imdbId, tvdbId }, 'Failed to backfill external ids for a manually added title');
+        app.log.warn(
+          { err, tmdbId, imdbId, tvdbId },
+          'Failed to backfill external ids for a manually added title',
+        );
       }
     }
 
@@ -474,6 +481,48 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  // GET /api/titles/non-russian-audit - Health tab's "Non-Russian Titles"
+  // panel: re-checks every title with a tmdb_id against TMDB's *live*
+  // original_language (see src/library/nonRussianAudit.ts, shared with
+  // scripts/audit-non-russian-titles.ts) and reports anything that isn't
+  // "ru". Read-only -- deletes nothing. Can take a while (one TMDB call per
+  // title, throttled), so this is a manually-triggered scan, not something
+  // polled automatically like /health.
+  app.get('/titles/non-russian-audit', async (_request, reply) => {
+    if (!config.tmdbApiKey) {
+      return reply.code(400).send({ error: 'TMDB_API_KEY is not configured' });
+    }
+    const { checked, total, flagged } = await findNonRussianTitles();
+    return {
+      checked,
+      total,
+      flagged: flagged.map((f) => ({
+        id: f.title.id,
+        nameRu: f.title.nameRu,
+        nameEn: f.title.nameEn,
+        tmdbId: f.title.tmdbId,
+        imdbId: f.title.imdbId,
+        originalLanguage: f.originalLanguage,
+        ruleCount: f.ruleCount,
+        mappingCount: f.mappingCount,
+      })),
+    };
+  });
+
+  // DELETE /api/titles/:id - Removes a title and every rule that points at
+  // it (which cascades to that rule's mappings -- see rulesRepo.deleteRule).
+  // Used by the Non-Russian Titles panel's per-row delete button; no other
+  // admin UI surface exposes deleting a title today.
+  app.delete('/titles/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const title = await getTitleById(id);
+    if (!title) {
+      return reply.code(404).send({ success: false, error: 'Title not found' });
+    }
+    await deleteTitleWithRules(id);
+    return { success: true };
   });
 
   // POST /api/rules - Create or update manual rule
@@ -778,7 +827,9 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     if (parsed.data.offset !== undefined) options.offset = parsed.data.offset;
     const entries = await listFeedEntries(options);
 
-    const matchedTitleIds = [...new Set(entries.map((e) => e.titleId).filter((id): id is string => id !== null))];
+    const matchedTitleIds = [
+      ...new Set(entries.map((e) => e.titleId).filter((id): id is string => id !== null)),
+    ];
     const mappedKeys = await listMappedEpisodeKeys(matchedTitleIds);
 
     return entries.map((e) => {
@@ -845,7 +896,11 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     if (!result.ok) {
       return { success: false, error: result.error };
     }
-    return { success: true, alreadyDownloaded: result.alreadyDownloaded, rawTitle: result.rawTitle };
+    return {
+      success: true,
+      alreadyDownloaded: result.alreadyDownloaded,
+      rawTitle: result.rawTitle,
+    };
   });
 
   // GET /api/feed/:topicId/download - same action, reachable as a plain
