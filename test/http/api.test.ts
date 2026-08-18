@@ -421,7 +421,14 @@ describe.skipIf(!hasTestDb)('POST /api/torrents/:hash/preview (real Postgres)', 
     vi.mocked(searchTitles).mockImplementation(async (query: string) => {
       if (query === 'Unknown Show') {
         return [
-          { tmdbId: 555, nameRu: 'Неизвестное шоу', nameEn: 'Unknown Show', year: 2024, posterUrl: null },
+          {
+            tmdbId: 555,
+            nameRu: 'Неизвестное шоу',
+            nameEn: 'Unknown Show',
+            year: 2024,
+            posterUrl: null,
+            originalLanguage: 'ru',
+          },
         ];
       }
       return [];
@@ -845,7 +852,11 @@ describe.skipIf(!hasTestDb)('GET /api/titles/resolve (real Postgres)', () => {
       year: 2020,
       posterUrl: null,
     });
-    expect(resolveTitleIds).toHaveBeenCalledWith({ tmdbId: null, imdbId: 'tt1234567', tvdbId: null });
+    expect(resolveTitleIds).toHaveBeenCalledWith({
+      tmdbId: null,
+      imdbId: 'tt1234567',
+      tvdbId: null,
+    });
     await app.close();
   });
 });
@@ -1092,7 +1103,9 @@ describe.skipIf(!hasTestDb)('GET/POST /api/feed/:topicId/download (real Postgres
   });
 
   async function seedFeedEntry(topicId: number): Promise<void> {
-    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const title = await pool.query(
+      `insert into titles (name_ru) values ('Большой куш') returning id`,
+    );
     await pool.query(
       `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated)
        values ($1, $2, 'Большой куш. Бангкок 2 сезон: 5 выпуск', $3, now())`,
@@ -1189,9 +1202,12 @@ describe.skipIf(!hasTestDb)('GET/POST /api/feed/:topicId/download (real Postgres
     await seedFeedEntry(3);
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ status: 'ok', solution: { response: '' } }), {
-        status: 200,
-      })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: 'ok', solution: { response: '' } }), {
+            status: 200,
+          }),
+      ),
     );
 
     const app = build();
@@ -1273,7 +1289,9 @@ describe.skipIf(!hasTestDb)('GET /api/feed season/episode/alreadyInLibrary (real
   });
 
   it('derives season/episode from raw_title and flags an entry whose episode is already mapped', async () => {
-    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const title = await pool.query(
+      `insert into titles (name_ru) values ('Большой куш') returning id`,
+    );
     const titleId = title.rows[0].id as string;
 
     // Already in the library: a torrent mapped to S02E05 for this title.
@@ -1289,11 +1307,10 @@ describe.skipIf(!hasTestDb)('GET /api/feed season/episode/alreadyInLibrary (real
        values ('h1', $1, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
       [titleId],
     );
-    await pool.query(`insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 2, 5, $3)`, [
-      file.rows[0].id,
-      titleId,
-      rule.rows[0].id,
-    ]);
+    await pool.query(
+      `insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 2, 5, $3)`,
+      [file.rows[0].id, titleId, rule.rows[0].id],
+    );
 
     // Two feed entries: one for the already-mapped S02E05, one for a new S02E06.
     await pool.query(
@@ -1487,7 +1504,9 @@ describe('POST /api/ingest/run', () => {
   beforeEach(() => {
     vi.spyOn(config, 'adminUser', 'get').mockReturnValue('admin');
     vi.spyOn(config, 'adminPass', 'get').mockReturnValue('supersecret');
-    vi.mocked(runIngestDeduped).mockReset().mockResolvedValue({} as never);
+    vi.mocked(runIngestDeduped)
+      .mockReset()
+      .mockResolvedValue({} as never);
   });
 
   afterEach(() => {
@@ -1502,7 +1521,10 @@ describe('POST /api/ingest/run', () => {
       headers: { authorization: authHeader },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ success: true, message: 'Ingest run triggered in background' });
+    expect(response.json()).toEqual({
+      success: true,
+      message: 'Ingest run triggered in background',
+    });
     expect(runIngestDeduped).toHaveBeenCalledTimes(1);
     await app.close();
   });
