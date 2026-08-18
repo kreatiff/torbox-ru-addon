@@ -23,13 +23,23 @@ export function isValidUuid(value: string): boolean {
 }
 
 /**
- * The id a title is advertised under to Stremio -- imdb-first, so Cinemeta
- * keeps supplying the richer metadata (episode titles, thumbnails,
- * descriptions) this addon can't match. Only a title with no `imdb_id`
- * falls back to the synthetic scheme.
+ * The id a title is advertised under to Stremio -- always this addon's own
+ * `torboxru:` synthetic scheme, even when the title has an `imdb_id`.
+ *
+ * This used to prefer the bare `tt…` id so Cinemeta could still supply
+ * metadata for titles this addon couldn't match -- but that was true back
+ * when this addon had no `meta` route of its own (issue #20). Once it
+ * started answering `meta` for `tt` ids too, with real Kinopoisk data
+ * (issue #28), sharing Cinemeta's id stopped working *for that purpose*:
+ * Stremio doesn't merge `meta` answers from multiple addons, it uses
+ * whichever installed addon answers first, and Cinemeta -- a default,
+ * always-installed addon many clients can't even reorder (e.g. Nuvio
+ * hardcodes it first) -- wins that race every time. The synthetic id is
+ * the only id no other addon can claim, so it's the only way to guarantee
+ * *this* addon's (Kinopoisk-backed) answer is actually the one served.
  */
-export function stremioIdForTitle(title: Pick<Title, 'id' | 'imdbId'>): string {
-  return title.imdbId ?? `${SYNTHETIC_PREFIX}${title.id}`;
+export function stremioIdForTitle(title: Pick<Title, 'id'>): string {
+  return `${SYNTHETIC_PREFIX}${title.id}`;
 }
 
 /** Extracts and validates the title uuid from a `torboxru:<uuid>` id.
@@ -74,7 +84,6 @@ function padEpisode(n: number): string {
 type MetaSourceTitle = Pick<
   Title,
   | 'id'
-  | 'imdbId'
   | 'nameRu'
   | 'nameEn'
   | 'year'

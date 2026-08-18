@@ -48,12 +48,8 @@ function mockKinopoiskFetch(kinopoiskId = 326) {
 
 describe('catalogMapper (pure, no DB needed)', () => {
   describe('stremioIdForTitle', () => {
-    it('prefers imdbId when present', () => {
-      expect(stremioIdForTitle({ id: 'uuid-1', imdbId: 'tt1234567' })).toBe('tt1234567');
-    });
-
-    it('falls back to the synthetic torboxru: scheme when there is no imdbId', () => {
-      expect(stremioIdForTitle({ id: 'uuid-1', imdbId: null })).toBe('torboxru:uuid-1');
+    it('always uses the synthetic torboxru: scheme, even when imdbId is present', () => {
+      expect(stremioIdForTitle({ id: 'uuid-1' })).toBe('torboxru:uuid-1');
     });
   });
 
@@ -181,14 +177,20 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
   });
 
   describe('GET /:token/catalog/series/:catalogId.json', () => {
-    it('lists a mapped title with imdb_id as a tt-prefixed card carrying its poster', async () => {
-      await seedMappedTitle({
+    it('lists a mapped title as a torboxru:<uuid> card even when it has an imdb_id', async () => {
+      // Deliberately synthetic, not the bare imdb_id (issue: "AI integration
+      // matched non-Russian shows" follow-up, Kinopoisk override for Nuvio):
+      // Stremio uses whichever installed addon answers `meta` first for a
+      // given id, and Cinemeta -- unremovable/unreorderable in some clients
+      // -- would always win a shared `tt` id. The synthetic id is the only
+      // one only this addon can answer.
+      const { titleId } = await seedMappedTitle({
         nameRu: 'Show With Imdb',
         hash: 'h1',
         imdbId: 'tt1234567',
         posterUrl: 'https://example.com/poster.jpg',
       });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}.json`,
@@ -197,7 +199,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
       const body = response.json();
       expect(body.metas).toHaveLength(1);
       expect(body.metas[0]).toMatchObject({
-        id: 'tt1234567',
+        id: `torboxru:${titleId}`,
         type: 'series',
         name: 'Show With Imdb',
         poster: 'https://example.com/poster.jpg',
@@ -211,7 +213,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         hash: 'h1',
         tmdbId: 555,
       });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}.json`,
@@ -223,7 +225,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
 
     it('excludes an unmapped title', async () => {
       await pool.query(`insert into titles (name_ru) values ('Unmapped Show')`);
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}.json`,
@@ -245,7 +247,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         imdbId: 'tt0000002',
         ruleCreatedAt: '2024-01-01T00:00:00Z',
       });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}.json`,
@@ -266,7 +268,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
           ruleCreatedAt: `202${i}-01-01T00:00:00Z`,
         });
       }
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}/skip=1.json`,
@@ -283,7 +285,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         hash: 'h2',
         imdbId: 'tt0000002',
       });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}/${encodeURIComponent('search=Ежик')}.json`,
@@ -345,7 +347,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         [fileIds, titleIds, hashes.map(() => 1), hashes.map(() => 1), ruleIds],
       );
 
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/${CATALOG_ID}.json`,
@@ -355,7 +357,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
     });
 
     it('404s for a catalog id other than the declared one', async () => {
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/catalog/series/not-the-real-catalog.json`,
@@ -365,7 +367,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
     });
 
     it('404s for a wrong token', async () => {
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/wrong-token/catalog/series/${CATALOG_ID}.json`,
@@ -384,7 +386,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         season: 2,
         episode: 5,
       });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/meta/series/torboxru:${titleId}.json`,
@@ -404,7 +406,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
     });
 
     it('404s for an unknown tt id -- we only answer for titles actually in the library', async () => {
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/meta/series/tt1234567.json`,
@@ -421,21 +423,21 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
         vi.restoreAllMocks();
       });
 
-      it("serves meta for a tt-id title, reversing #20's Cinemeta-wins default", async () => {
-        await seedMappedTitle({
+      it("serves meta for a tt-id title, reversing #20's Cinemeta-wins default -- but still hands back the addon's own synthetic id, not the tt id it was requested with", async () => {
+        const { titleId } = await seedMappedTitle({
           nameRu: 'Show With Imdb',
           hash: 'h1',
           imdbId: 'tt2000001',
           season: 1,
           episode: 1,
         });
-        const app = build();
+        const app = await build();
         const response = await app.inject({
           method: 'GET',
           url: `/${config.addonToken}/meta/series/tt2000001.json`,
         });
         expect(response.statusCode).toBe(200);
-        expect(response.json().meta.id).toBe('tt2000001');
+        expect(response.json().meta.id).toBe(`torboxru:${titleId}`);
         await app.close();
       });
 
@@ -451,7 +453,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
           season: 1,
           episode: 1,
         });
-        const app = build();
+        const app = await build();
         const url = `/${config.addonToken}/meta/series/tt2000002.json`;
 
         const first = await app.inject({ method: 'GET', url });
@@ -484,7 +486,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
           season: 1,
           episode: 1,
         });
-        const app = build();
+        const app = await build();
         const response = await app.inject({
           method: 'GET',
           url: `/${config.addonToken}/meta/series/tt2000003.json`,
@@ -508,7 +510,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
           season: 1,
           episode: 1,
         });
-        const app = build();
+        const app = await build();
         const response = await app.inject({
           method: 'GET',
           url: `/${config.addonToken}/meta/series/torboxru:${titleId}.json`,
@@ -526,7 +528,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
           season: 1,
           episode: 1,
         });
-        const app = build();
+        const app = await build();
         const response = await app.inject({
           method: 'GET',
           url: `/${config.addonToken}/meta/series/tmdb:888.json`,
@@ -538,7 +540,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
     });
 
     it('404s (not 500) for a malformed uuid', async () => {
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/meta/series/torboxru:not-a-uuid.json`,
@@ -548,7 +550,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
     });
 
     it('404s for an unknown (but well-formed) title uuid', async () => {
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/${config.addonToken}/meta/series/torboxru:00000000-0000-0000-0000-000000000000.json`,
@@ -559,7 +561,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
 
     it('404s for a wrong token', async () => {
       const { titleId } = await seedMappedTitle({ nameRu: 'Show', hash: 'h1', tmdbId: 1 });
-      const app = build();
+      const app = await build();
       const response = await app.inject({
         method: 'GET',
         url: `/wrong-token/meta/series/torboxru:${titleId}.json`,
@@ -577,7 +579,7 @@ describe.skipIf(!hasTestDb)('addon routes: catalog + meta (real Postgres)', () =
       season: 1,
       episode: 1,
     });
-    const app = build();
+    const app = await build();
 
     const catalogResponse = await app.inject({
       method: 'GET',

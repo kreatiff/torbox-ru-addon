@@ -36,7 +36,8 @@ async function respondWithCatalog(
 
 /**
  * Serves "My TorBox Library" (issue #20): every title with at least one
- * mapped file, imdb-first ids with a torboxru: fallback (catalogMapper.ts).
+ * mapped file, always under its own torboxru: synthetic id (catalogMapper.ts)
+ * so this addon -- not Cinemeta -- is guaranteed to answer `meta` for it.
  * Stremio requests this two different ways depending on whether `extra` is
  * present -- both are registered here against the same handler, following
  * stream.ts's "strip .json manually" convention:
