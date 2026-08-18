@@ -6,6 +6,7 @@ import {
   updateTitle,
   findTitleByCleanedName,
   listMappedTitles,
+  setKinopoiskMetadata,
 } from '../../../src/db/repositories/titlesRepo.js';
 
 describe.skipIf(!hasTestDb)('titlesRepo', () => {
@@ -55,7 +56,9 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
     });
 
     it('is a no-op read for an empty patch', async () => {
-      const inserted = await pool.query(`insert into titles (name_ru) values ('Show') returning id`);
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Show') returning id`,
+      );
       const id = inserted.rows[0].id as string;
 
       const result = await updateTitle(id, {});
@@ -80,7 +83,9 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
 
     it('rejects a tmdbId that already belongs to another title (unique_violation)', async () => {
       await pool.query(`insert into titles (name_ru, tmdb_id) values ('Other', 42)`);
-      const inserted = await pool.query(`insert into titles (name_ru) values ('Mine') returning id`);
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Mine') returning id`,
+      );
       const id = inserted.rows[0].id as string;
 
       await expect(updateTitle(id, { tmdbId: 42 })).rejects.toMatchObject({ code: '23505' });
@@ -137,10 +142,9 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
 
   describe('listMappedTitles', () => {
     async function seedMappedTitle(nameRu: string, hash: string): Promise<string> {
-      const title = await pool.query(
-        `insert into titles (name_ru) values ($1) returning id`,
-        [nameRu],
-      );
+      const title = await pool.query(`insert into titles (name_ru) values ($1) returning id`, [
+        nameRu,
+      ]);
       const titleId = title.rows[0].id as string;
       await pool.query(
         `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
@@ -175,7 +179,9 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
     it('orders by most recently mapped (rule.created_at) first', async () => {
       const olderId = await seedMappedTitle('Older Show', 'h1');
       // created_at defaults to now(); force a deterministic order.
-      await pool.query(`update rules set created_at = now() - interval '1 day' where torrent_hash = 'h1'`);
+      await pool.query(
+        `update rules set created_at = now() - interval '1 day' where torrent_hash = 'h1'`,
+      );
       const newerId = await seedMappedTitle('Newer Show', 'h2');
 
       const titles = await listMappedTitles();
@@ -188,6 +194,53 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
 
       const [title] = await listMappedTitles();
       expect(title?.lastMappedAt).toBeNull();
+    });
+  });
+
+  describe('setKinopoiskMetadata', () => {
+    it('persists a full Kinopoisk enrichment patch, readable back via getTitleById', async () => {
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Show') returning id`,
+      );
+      const titleId = inserted.rows[0].id as string;
+
+      await setKinopoiskMetadata(titleId, {
+        kinopoiskId: 326,
+        description: 'Описание',
+        posterUrl: 'https://example.com/poster.jpg',
+        genres: ['драма'],
+        cast: ['Тим Роббинс', 'Морган Фриман'],
+      });
+
+      const title = await getTitleById(titleId);
+      expect(title).toMatchObject({
+        kinopoiskId: 326,
+        kinopoiskDescription: 'Описание',
+        kinopoiskPosterUrl: 'https://example.com/poster.jpg',
+        kinopoiskGenres: ['драма'],
+        kinopoiskCast: ['Тим Роббинс', 'Морган Фриман'],
+      });
+      expect(title?.kinopoiskCheckedAt).toBeInstanceOf(Date);
+    });
+
+    it('persists a "checked, nothing found" patch -- checkedAt still gets set so the caller stops retrying', async () => {
+      const inserted = await pool.query(
+        `insert into titles (name_ru) values ('Show') returning id`,
+      );
+      const titleId = inserted.rows[0].id as string;
+
+      await setKinopoiskMetadata(titleId, {
+        kinopoiskId: null,
+        description: null,
+        posterUrl: null,
+        genres: [],
+        cast: [],
+      });
+
+      const title = await getTitleById(titleId);
+      expect(title?.kinopoiskId).toBeNull();
+      expect(title?.kinopoiskDescription).toBeNull();
+      expect(title?.kinopoiskCheckedAt).toBeInstanceOf(Date);
     });
   });
 });
