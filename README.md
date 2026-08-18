@@ -245,6 +245,31 @@ Installing the manifest URL in real Stremio/AIOStreams and confirming
 actual playback needs a real deployment reachable from those clients — see
 the Status section above and `docs/milestones.md` §3.
 
+### Catalog + meta (issue #20): "My TorBox Library" in Discover
+
+Two more routes, added on top of the three above and under the same
+`/:token` prefix/auth:
+
+```
+GET /:token/catalog/series/torbox-ru-library.json
+GET /:token/catalog/series/torbox-ru-library/search=<query>&skip=<n>.json
+GET /:token/meta/series/:idJson
+```
+
+The catalog lists every title with at least one mapped file, newest-mapped
+first, with `search` and `skip` (Discover pagination) as optional extras. A
+title with an `imdb_id` is advertised as `tt…` so Stremio's built-in
+Cinemeta still supplies its richer metadata; a title with none falls back
+to this addon's own `torboxru:<uuid>` id and its own `/meta` route for the
+episode list, since Cinemeta has nothing to show for it otherwise. See
+`docs/decisions.md`'s "Stremio catalog + meta" section for the full design.
+
+**If you already have this addon installed, you need to reinstall it** for
+the catalog to show up — Stremio caches a manifest per addon version, and
+it doesn't reliably notice the bump on its own. Remove the addon and re-add
+the same manifest URL; the library then appears under Discover → Series →
+"My TorBox Library".
+
 ## Milestone 4: admin UI
 
 A React admin UI at `/admin` (Queue / Labeller / Library / Health tabs) plus
