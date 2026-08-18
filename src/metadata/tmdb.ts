@@ -11,6 +11,12 @@ const tmdbSearchResultSchema = z.object({
   original_name: z.string().optional().nullable(),
   first_air_date: z.string().optional().nullable(),
   poster_path: z.string().optional().nullable(),
+  // ISO 639-1 code (e.g. "ru", "en") -- TMDB always returns this on a TV
+  // object, but parsed defensively like every other field here. Drives the
+  // Russian-only auto-match gate in src/ingest/pipeline.ts's
+  // resolveTitleMatch; missing/unrecognised is treated as "not confirmed
+  // Russian" by that gate (fail closed), not "assume Russian".
+  original_language: z.string().optional().nullable(),
 });
 
 const tmdbSearchResponseSchema = z.object({
@@ -42,6 +48,7 @@ export interface TmdbSearchResult {
   nameEn: string | null;
   year: number | null;
   posterUrl: string | null;
+  originalLanguage: string | null;
 }
 
 export interface TmdbEpisode {
@@ -72,6 +79,7 @@ function toSearchResult(item: z.infer<typeof tmdbSearchResultSchema>): TmdbSearc
     nameEn: item.original_name ?? null,
     year: yearFromAirDate(item.first_air_date),
     posterUrl: item.poster_path ? `${TMDB_IMAGE_BASE}${item.poster_path}` : null,
+    originalLanguage: item.original_language ?? null,
   };
 }
 
@@ -101,10 +109,7 @@ function getAuthHeadersAndParams(
   return { headers, url };
 }
 
-async function tmdbFetch(
-  path: string,
-  params: Record<string, string> = {},
-): Promise<unknown> {
+async function tmdbFetch(path: string, params: Record<string, string> = {}): Promise<unknown> {
   const { headers, url } = getAuthHeadersAndParams(path, params);
   const response = await fetch(url, { headers });
 

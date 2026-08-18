@@ -53,12 +53,12 @@ describe('TMDB Client', () => {
     expect(fetchSpy).toHaveBeenCalled();
     const calledUrl = fetchSpy.mock.calls[0][0] as string;
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit;
-    
+
     expect(calledUrl).not.toContain('api_key=');
     expect(calledInit.headers).toEqual(
       expect.objectContaining({
         Authorization: 'Bearer header.jwt.token',
-      })
+      }),
     );
   });
 
@@ -71,6 +71,7 @@ describe('TMDB Client', () => {
           original_name: 'The Treasures',
           first_air_date: '2024-03-10',
           poster_path: '/poster.jpg',
+          original_language: 'ru',
         },
       ],
     };
@@ -87,7 +88,22 @@ describe('TMDB Client', () => {
       nameEn: 'The Treasures',
       year: 2024,
       posterUrl: 'https://image.tmdb.org/t/p/w500/poster.jpg',
+      originalLanguage: 'ru',
     });
+  });
+
+  it('defaults originalLanguage to null when TMDB omits it -- Russian-only auto-match gate (issue: LLM matching English shows) fails closed, not open', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          { id: 101, name: 'Show', original_name: null, first_air_date: null, poster_path: null },
+        ],
+      }),
+    });
+
+    const results = await searchTitles('Show');
+    expect(results[0]?.originalLanguage).toBeNull();
   });
 
   it('fetches external IDs correctly', async () => {
@@ -134,6 +150,7 @@ describe('TMDB Client', () => {
           original_name: 'The Treasures',
           first_air_date: '2024-03-10',
           poster_path: '/poster.jpg',
+          original_language: 'ru',
         },
       ],
     };
@@ -147,6 +164,7 @@ describe('TMDB Client', () => {
       nameEn: 'The Treasures',
       year: 2024,
       posterUrl: 'https://image.tmdb.org/t/p/w500/poster.jpg',
+      originalLanguage: 'ru',
     });
     const calledUrl = fetchSpy.mock.calls[0][0] as string;
     expect(calledUrl).toContain('/find/tt9999');
@@ -166,6 +184,7 @@ describe('TMDB Client', () => {
       original_name: 'Show EN',
       first_air_date: '2020-01-01',
       poster_path: '/p.jpg',
+      original_language: 'ru',
     };
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => mockResponse });
 
@@ -176,6 +195,7 @@ describe('TMDB Client', () => {
       nameEn: 'Show EN',
       year: 2020,
       posterUrl: 'https://image.tmdb.org/t/p/w500/p.jpg',
+      originalLanguage: 'ru',
     });
   });
 
@@ -183,7 +203,10 @@ describe('TMDB Client', () => {
     it('backfills imdb/tvdb ids and a name preview from a tmdbId alone', async () => {
       const fetchSpy = vi.fn().mockImplementation((url: string) => {
         if (url.includes('/external_ids')) {
-          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }) });
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }),
+          });
         }
         return Promise.resolve({
           ok: true,
@@ -217,13 +240,22 @@ describe('TMDB Client', () => {
             ok: true,
             json: async () => ({
               tv_results: [
-                { id: 101, name: 'Show', original_name: null, first_air_date: null, poster_path: null },
+                {
+                  id: 101,
+                  name: 'Show',
+                  original_name: null,
+                  first_air_date: null,
+                  poster_path: null,
+                },
               ],
             }),
           });
         }
         if (url.includes('/external_ids')) {
-          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }) });
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ imdb_id: 'tt42', tvdb_id: 99 }),
+          });
         }
         throw new Error(`unexpected fetch: ${url}`);
       });
@@ -240,11 +272,20 @@ describe('TMDB Client', () => {
       const fetchSpy = vi.fn().mockImplementation((url: string) => {
         if (url.includes('/external_ids')) {
           // TMDB thinks the tvdbId is different from what the human entered.
-          return Promise.resolve({ ok: true, json: async () => ({ imdb_id: 'tt-tmdb', tvdb_id: 777 }) });
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ imdb_id: 'tt-tmdb', tvdb_id: 777 }),
+          });
         }
         return Promise.resolve({
           ok: true,
-          json: async () => ({ id: 101, name: 'Show', original_name: null, first_air_date: null, poster_path: null }),
+          json: async () => ({
+            id: 101,
+            name: 'Show',
+            original_name: null,
+            first_air_date: null,
+            poster_path: null,
+          }),
         });
       });
       global.fetch = fetchSpy;
