@@ -85,3 +85,23 @@ export async function listMappedEpisodeKeys(titleIds: string[]): Promise<Set<str
   );
   return new Set(result.rows.map((row) => `${row.title_id}:${row.season}:${row.episode}`));
 }
+
+/**
+ * Every (season, episode) mapped for a single title, deduped and ordered --
+ * powers the addon's `meta` route's `videos[]` list (issue #20). Deliberately
+ * not reusing listMappedEpisodeKeys: that one builds a cross-title Set for
+ * the Feed tab's membership check, not an ordered per-title list. Served by
+ * the (title_id, season, episode) index already on this table.
+ */
+export async function listMappedEpisodesForTitle(
+  titleId: string,
+): Promise<{ season: number; episode: number }[]> {
+  const result = await pool.query(
+    'select distinct season, episode from mappings where title_id = $1 order by season, episode',
+    [titleId],
+  );
+  return result.rows.map((row) => ({
+    season: Number(row.season),
+    episode: Number(row.episode),
+  }));
+}

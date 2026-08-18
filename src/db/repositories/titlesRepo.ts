@@ -86,6 +86,40 @@ export async function listAll(): Promise<Title[]> {
   return result.rows.map((row) => toTitle(titleRowSchema.parse(row)));
 }
 
+export interface CatalogTitle extends Title {
+  lastMappedAt: Date | null;
+}
+
+/**
+ * Every title with at least one mapped file -- the Stremio catalog route's
+ * source list (issue #20). The `join mappings` (not `left join`) is what
+ * implements "at least one mapped file"; `group by t.id` collapses the
+ * fan-out from multiple mapped episodes back to one row per title.
+ * `lastMappedAt` (the newest rule.created_at behind any of this title's
+ * mappings) drives "recently added" ordering -- rules is left-joined since
+ * a mapping's rule can in principle have been deleted out from under it.
+ *
+ * Search/pagination happen in the caller, not here, deliberately: filtering
+ * needs normalise() (src/normalize/normalise.ts) so a Cyrillic search folds
+ * homoglyphs and ё/е the same way findTitleByCleanedName does -- a raw SQL
+ * `ilike` would miss exactly the mixed-script names this library is full
+ * of. A full fetch is the same "table is small" tradeoff listAll() makes.
+ */
+export async function listMappedTitles(): Promise<CatalogTitle[]> {
+  const result = await pool.query(
+    `select t.*, max(r.created_at) as last_mapped_at
+     from titles t
+     join mappings m on m.title_id = t.id
+     left join rules r on r.id = m.rule_id
+     group by t.id
+     order by max(r.created_at) desc nulls last, t.name_ru asc`,
+  );
+  return result.rows.map((row) => ({
+    ...toTitle(titleRowSchema.parse(row)),
+    lastMappedAt: row.last_mapped_at ? new Date(row.last_mapped_at) : null,
+  }));
+}
+
 export async function findOrCreateTitle(
   titleData: Omit<Title, 'id'>,
 ): Promise<Title> {

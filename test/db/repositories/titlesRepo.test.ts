@@ -5,6 +5,7 @@ import {
   getTitleById,
   updateTitle,
   findTitleByCleanedName,
+  listMappedTitles,
 } from '../../../src/db/repositories/titlesRepo.js';
 
 describe.skipIf(!hasTestDb)('titlesRepo', () => {
@@ -131,6 +132,62 @@ describe.skipIf(!hasTestDb)('titlesRepo', () => {
       await pool.query(`insert into titles (name_ru) values ('Совсем другое шоу')`);
       const found = await findTitleByCleanedName('Несуществующее шоу');
       expect(found).toBeNull();
+    });
+  });
+
+  describe('listMappedTitles', () => {
+    async function seedMappedTitle(nameRu: string, hash: string): Promise<string> {
+      const title = await pool.query(
+        `insert into titles (name_ru) values ($1) returning id`,
+        [nameRu],
+      );
+      const titleId = title.rows[0].id as string;
+      await pool.query(
+        `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+         values ($1, 1, 'Torrent', now())`,
+        [hash],
+      );
+      const rule = await pool.query(
+        `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+         values ($1, $2, 1, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+        [hash, titleId],
+      );
+      const file = await pool.query(
+        `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+         values ($1, 1, 'a.mp4', 1, true) returning id`,
+        [hash],
+      );
+      await pool.query(
+        `insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 1, 1, $3)`,
+        [file.rows[0].id, titleId, rule.rows[0].id],
+      );
+      return titleId;
+    }
+
+    it('returns only titles with at least one mapped file', async () => {
+      const mappedId = await seedMappedTitle('Mapped Show', 'h1');
+      await pool.query(`insert into titles (name_ru) values ('Unmapped Show')`);
+
+      const titles = await listMappedTitles();
+      expect(titles.map((t) => t.id)).toEqual([mappedId]);
+    });
+
+    it('orders by most recently mapped (rule.created_at) first', async () => {
+      const olderId = await seedMappedTitle('Older Show', 'h1');
+      // created_at defaults to now(); force a deterministic order.
+      await pool.query(`update rules set created_at = now() - interval '1 day' where torrent_hash = 'h1'`);
+      const newerId = await seedMappedTitle('Newer Show', 'h2');
+
+      const titles = await listMappedTitles();
+      expect(titles.map((t) => t.id)).toEqual([newerId, olderId]);
+    });
+
+    it('reports lastMappedAt as null when the mapping rule has since been deleted', async () => {
+      const titleId = await seedMappedTitle('Orphaned Mapping Show', 'h1');
+      await pool.query(`update mappings set rule_id = null where title_id = $1`, [titleId]);
+
+      const [title] = await listMappedTitles();
+      expect(title?.lastMappedAt).toBeNull();
     });
   });
 });
