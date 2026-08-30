@@ -1,6 +1,9 @@
 # Built and run with platform: linux/arm64 pinned in docker-compose.yml
-# (Oracle Cloud Ampere A1 — see spec §2). No native/arm64-incompatible deps:
-# pg is pure JS, no pg-native.
+# (Oracle Cloud Ampere A1 — see spec §2). pg is pure JS, no pg-native.
+# sodium-native (via @fastify/secure-session, milestone 5) IS a native addon
+# with arm64 prebuilds -- but only for glibc, not musl, which is why the
+# final `runtime` stage below is glibc-based rather than Alpine; see its
+# comment.
 
 # UI build runs on the build host's *native* platform (via $BUILDPLATFORM),
 # not the arm64 target: this stage has to *execute* esbuild/rollup to bundle
@@ -51,16 +54,27 @@ RUN npm run build
 # already safe since --omit=dev excludes devDependencies (esbuild/rollup,
 # the packages whose install-time binaries triggered the earlier crashes)
 # -- that assumption didn't hold in practice, even with production
-# dependencies unchanged. node_modules for this dependency tree is pure JS
-# (no pg-native, no other native/arch-specific addons -- see the top-of-file
-# comment), so it's architecture-independent and safe to install natively
-# and copy in, same as the compiled dist/ output from the other two stages.
+# dependencies unchanged. sodium-native (see the `runtime` stage's comment)
+# is a native addon among these prod deps, but it has no install/postinstall
+# script -- npm ci just copies its prebuilt binaries in, the same
+# architecture-independent operation as any pure-JS package -- so this stage
+# is still safe to run on $BUILDPLATFORM and copy the result in, same as the
+# compiled dist/ output from the other two stages.
 FROM --platform=$BUILDPLATFORM node:22-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM node:22-alpine AS runtime
+# sodium-native (pulled in by @fastify/secure-session, milestone 5's Google
+# OAuth session cookies) is a native addon distributed with prebuilt
+# binaries for a fixed platform list. It ships a glibc "linux-arm64"
+# prebuild but no "linux-arm64-musl" one (verified against the published
+# 5.1.0 tarball) -- Alpine's musl libc, so `node:22-alpine` here can never
+# load it (ADDON_NOT_FOUND) no matter which stage installs node_modules.
+# Switching only this final stage to a glibc base resolves the existing
+# bundled "linux-arm64" prebuild; the earlier stages can stay Alpine since
+# node_modules' file contents don't depend on the installer's OS.
+FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json ./
