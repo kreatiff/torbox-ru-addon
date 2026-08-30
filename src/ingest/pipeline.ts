@@ -245,14 +245,22 @@ async function fetchTmdbSeason(
   return [];
 }
 
+export interface PollFeedResult {
+  feedEntriesMatched: number;
+  feedEntriesNew: number;
+}
+
 /**
  * RuTracker feed scraper (docs/rutracker-scraper-plan.md): poll the
  * configured Atom feed(s), match entries against the library, and upsert
  * matched entries into feed_entries. Unmatched entries are dropped unless
  * RUTRACKER_STORE_UNMATCHED is set, keeping the table library-scoped and
  * bounded. Purely observational -- never touches torrents/rules/mappings.
+ * Exported (and wrapped by pollFeedDeduped below) so the admin "Refresh
+ * Feed" button can poll just this step without paying for a full
+ * runIngest() (TorBox mylist + LLM extraction), which is what makes it slow.
  */
-async function pollFeed(): Promise<{ feedEntriesMatched: number; feedEntriesNew: number }> {
+export async function pollFeed(): Promise<PollFeedResult> {
   const feedEntries = await fetchFeed();
   if (feedEntries.length === 0) {
     return { feedEntriesMatched: 0, feedEntriesNew: 0 };
@@ -567,4 +575,24 @@ export function runIngestDeduped(): Promise<IngestSummary> {
     ingestInFlight = null;
   });
   return ingestInFlight;
+}
+
+let feedPollInFlight: Promise<PollFeedResult> | null = null;
+
+/**
+ * Coalescing wrapper around pollFeed(), same rationale as runIngestDeduped
+ * above: without it, two overlapping "Refresh Feed" clicks (or a click that
+ * lands mid-scheduled-ingest) could both read the same unnotified rows and
+ * send a duplicate Discord notification before either marks them notified.
+ * Does NOT share ingestInFlight -- a plain feed refresh should stay fast and
+ * not wait out an in-progress full ingest (TorBox mylist + LLM extraction).
+ */
+export function pollFeedDeduped(): Promise<PollFeedResult> {
+  if (feedPollInFlight) {
+    return feedPollInFlight;
+  }
+  feedPollInFlight = pollFeed().finally(() => {
+    feedPollInFlight = null;
+  });
+  return feedPollInFlight;
 }
