@@ -12,6 +12,16 @@ describe('torboxTorrentSchema', () => {
     expect(torrent.files).toEqual([]);
   });
 
+  it('normalizes files: null to undefined instead of failing validation', () => {
+    const torrent = torboxTorrentSchema.parse({
+      id: 1,
+      hash: 'abc',
+      name: 'Some Show',
+      files: null,
+    });
+    expect(torrent.files).toBeUndefined();
+  });
+
   it('coerces numeric-looking string ids/sizes, since APIs are inconsistent about this', () => {
     const torrent = torboxTorrentSchema.parse({
       id: '111',
@@ -35,8 +45,10 @@ describe('mylistResponseSchema', () => {
     const parsed = mylistResponseSchema.parse([
       { id: 1, hash: 'a', name: 'With files', files: [{ id: 1, name: 'x.mp4', size: 1 }] },
       { id: 2, hash: 'b', name: 'Without files' },
+      { id: 3, hash: 'c', name: 'Null files', files: null },
     ]);
     expect(parsed[0]?.files).toHaveLength(1);
     expect(parsed[1]?.files).toBeUndefined();
+    expect(parsed[2]?.files).toBeUndefined();
   });
 });
