@@ -29,7 +29,7 @@ import {
   fetchSeasonDetails,
   resolveTitleIds,
 } from '../../../metadata/tmdb.js';
-import { runIngestDeduped, resolveTitleMatch } from '../../../ingest/pipeline.js';
+import { runIngestDeduped, pollFeedDeduped, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
 import { parseFeedEntrySeasonEpisode } from '../../../rutracker/index.js';
@@ -941,5 +941,20 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return { success: true, message: 'Ingest run triggered in background' };
+  });
+
+  // POST /api/feed/refresh - Poll the RuTracker feed only, without paying
+  // for a full ingest run (TorBox mylist + LLM extraction). Awaited rather
+  // than backgrounded like /ingest/run: a single Atom feed fetch + match +
+  // upsert is fast enough to return synchronously, so the Feed tab's
+  // "Refresh Feed" button can show the result immediately.
+  app.post('/feed/refresh', async (_request, reply) => {
+    try {
+      const result = await pollFeedDeduped();
+      return { success: true, ...result };
+    } catch (err) {
+      app.log.error({ err }, 'Manual feed refresh failed');
+      return reply.code(502).send({ success: false, error: 'Failed to refresh RuTracker feed' });
+    }
   });
 }

@@ -344,6 +344,13 @@ interface MatchFeedEntryResponse {
   error?: string;
 }
 
+interface RefreshFeedResponse {
+  success: boolean;
+  feedEntriesMatched?: number;
+  feedEntriesNew?: number;
+  error?: string;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -605,6 +612,27 @@ function AdminApp() {
     },
     onError: (err) => {
       showToast(`Match failed: ${err.message}`, 'error');
+    },
+  });
+
+  const refreshFeed = useMutation({
+    mutationFn: () => apiFetch<RefreshFeedResponse>('/api/feed/refresh', { method: 'POST' }),
+    onSuccess: (result) => {
+      if (!result.success) {
+        showToast(`Feed refresh failed: ${result.error ?? 'unknown error'}`, 'error');
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+      queryClient.invalidateQueries({ queryKey: ['activity'] });
+      const { feedEntriesNew = 0, feedEntriesMatched = 0 } = result;
+      showToast(
+        feedEntriesNew > 0
+          ? `Feed refreshed: ${feedEntriesNew} new of ${feedEntriesMatched} matched.`
+          : `Feed refreshed: no new entries (${feedEntriesMatched} matched).`,
+      );
+    },
+    onError: (err) => {
+      showToast(`Feed refresh failed: ${err.message}`, 'error');
     },
   });
 
@@ -1001,6 +1029,7 @@ function AdminApp() {
             isLoading={isFeedLoading}
             downloadFeedEntry={downloadFeedEntry}
             matchFeedEntry={matchFeedEntry}
+            refreshFeed={refreshFeed}
             library={library}
           />
         )}
@@ -2709,9 +2738,17 @@ interface FeedViewProps {
     Error,
     { topicId: number; titleId: string }
   >;
+  refreshFeed: UseMutationResult<RefreshFeedResponse, Error, void>;
   library: LibraryItem[];
 }
-function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library }: FeedViewProps) {
+function FeedView({
+  feed,
+  isLoading,
+  downloadFeedEntry,
+  matchFeedEntry,
+  refreshFeed,
+  library,
+}: FeedViewProps) {
   const [downloadingTopicId, setDownloadingTopicId] = useState<number | null>(null);
 
   if (isLoading) return <LoadingState label="Loading RuTracker feed..." />;
@@ -2720,6 +2757,23 @@ function FeedView({ feed, isLoading, downloadFeedEntry, matchFeedEntry, library 
     <>
       <div className="view-header">
         <h2>RuTracker Feed</h2>
+        <div className="view-header-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => refreshFeed.mutate()}
+            disabled={refreshFeed.isPending}
+          >
+            {refreshFeed.isPending ? (
+              <>
+                <RefreshCw className="animate-spin" size={14} /> Refreshing...
+              </>
+            ) : (
+              <>
+                <RefreshCw size={14} /> Refresh Feed
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="view-body">

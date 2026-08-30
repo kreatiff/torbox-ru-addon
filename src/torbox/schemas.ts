@@ -30,8 +30,15 @@ export const torboxTorrentSchema = z.object({
   created_at: z.coerce.date().nullable().optional(),
   // Deliberately optional+undefined-checkable (not defaulted to []) — its
   // absence, not its emptiness, is what tells ingest to fall back to a
-  // per-torrent ?id= fetch. See src/torbox/client.ts.
-  files: z.array(torboxFileSchema).optional(),
+  // per-torrent ?id= fetch. See src/torbox/client.ts. TorBox sends this as
+  // JSON `null` (not just an omitted key) for at least some torrents, so
+  // `.nullable()` plus the transform below normalizes null to undefined
+  // rather than letting it fail validation outright.
+  files: z
+    .array(torboxFileSchema)
+    .nullable()
+    .optional()
+    .transform((v) => v ?? undefined),
 });
 export type TorboxTorrent = z.infer<typeof torboxTorrentSchema>;
 
