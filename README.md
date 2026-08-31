@@ -261,13 +261,16 @@ GET /:token/meta/series/:idJson
 ```
 
 The catalog lists every title with at least one mapped file, newest-mapped
-first, with `search` and `skip` (Discover pagination) as optional extras. A
-title with an `imdb_id` is advertised as `tt…`; a title with none falls
-back to this addon's own `torboxru:<uuid>` id. Either way, `/meta` is what
-serves that title's episode list and description (see "Kinopoisk-backed
-meta" below — as of issue #28, that response is no longer Cinemeta's).
-See `docs/decisions.md`'s "Stremio catalog + meta" section for the full
-design.
+first, with `search` and `skip` (Discover pagination) as optional extras.
+Every card is advertised under this addon's own `torboxru:<uuid>` id, even
+when the title also has an `imdb_id` — Stremio uses whichever installed
+addon answers `meta` first for a shared id, and Cinemeta (which some
+clients, e.g. Nuvio, can't reorder below other addons at all) would always
+win a bare `tt…` id, silently reverting the title back to Cinemeta's
+metadata. `/meta` serves the synthetic id's episode list and description
+(see "Kinopoisk-backed meta" below), and still also answers plain `tt…`/
+`tmdb:…` ids for backward compatibility. See `docs/decisions.md`'s
+"Force synthetic ids for every title" section for the full reasoning.
 
 **If you already have this addon installed, you need to reinstall it** for
 the catalog to show up — Stremio caches a manifest per addon version, and
