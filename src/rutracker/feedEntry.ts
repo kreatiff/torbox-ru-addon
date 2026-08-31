@@ -28,11 +28,31 @@ interface RawAtomEntry {
   updated?: unknown;
 }
 
+/**
+ * RuTracker's feed now emits a second `<link rel="enclosure" href="magnet:…">`
+ * alongside the topic-page `<link>` on every entry -- fast-xml-parser folds
+ * two same-named sibling tags into an array instead of a single object once
+ * that happens (verified directly against the parser), which this used to
+ * not handle at all: it returned the whole array as `url`, `feedEntrySchema`
+ * (a `z.url()`) rejected it, and every single entry started getting dropped
+ * as "malformed" -- feed polling degraded to silently ingesting nothing new,
+ * with no error anywhere (fetchOneFeed's soft-fail posture is deliberate for
+ * real outages, but that's not what this was). Picks the first link that
+ * isn't the magnet enclosure, whether there's one link or several.
+ */
 function extractHref(link: unknown): unknown {
-  if (typeof link === 'object' && link !== null && '@_href' in link) {
-    return (link as Record<string, unknown>)['@_href'];
+  const links = Array.isArray(link) ? link : [link];
+  for (const candidate of links) {
+    if (
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      '@_href' in candidate &&
+      (candidate as Record<string, unknown>)['@_rel'] !== 'enclosure'
+    ) {
+      return (candidate as Record<string, unknown>)['@_href'];
+    }
   }
-  return link;
+  return undefined;
 }
 
 /**

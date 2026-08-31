@@ -44,3 +44,38 @@ describe('parseFeedEntry against the real live feed fixture (f/939)', () => {
     expect(entry?.updatedAt).toBeInstanceOf(Date);
   });
 });
+
+describe('parseFeedEntry picks the topic link, not the magnet enclosure link', () => {
+  // RuTracker's feed emits <link href="…viewtopic…"> AND <link rel="enclosure"
+  // href="magnet:…">on every entry -- fast-xml-parser folds two same-named
+  // sibling tags into an array once that happens, which used to break
+  // extraction entirely (the whole array reached z.url() as `url` and failed
+  // validation, silently dropping every real feed entry as "malformed").
+  it('extracts the viewtopic href when link is an array (topic link before enclosure)', () => {
+    const raw = parser.parse(
+      `<entry>
+        <id>tag:rto.feed,2026-08-29:/t/6901675</id>
+        <link href="https://rutracker.org/forum/viewtopic.php?t=6901675"/>
+        <link rel="enclosure" href="magnet:?xt=urn:btih:ABC" type="application/x-bittorrent"/>
+        <title>Show</title>
+        <updated>2026-08-29T21:16:26+00:00</updated>
+      </entry>`,
+    ).entry;
+    const entry = parseFeedEntry(raw as Parameters<typeof parseFeedEntry>[0]);
+    expect(entry?.url).toBe('https://rutracker.org/forum/viewtopic.php?t=6901675');
+  });
+
+  it('extracts the viewtopic href when link is an array (enclosure before topic link)', () => {
+    const raw = parser.parse(
+      `<entry>
+        <id>tag:rto.feed,2026-08-29:/t/6901675</id>
+        <link rel="enclosure" href="magnet:?xt=urn:btih:ABC" type="application/x-bittorrent"/>
+        <link href="https://rutracker.org/forum/viewtopic.php?t=6901675"/>
+        <title>Show</title>
+        <updated>2026-08-29T21:16:26+00:00</updated>
+      </entry>`,
+    ).entry;
+    const entry = parseFeedEntry(raw as Parameters<typeof parseFeedEntry>[0]);
+    expect(entry?.url).toBe('https://rutracker.org/forum/viewtopic.php?t=6901675');
+  });
+});
