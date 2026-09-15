@@ -9,8 +9,6 @@ import {
   updateTitle,
   listTitlesWithSeasons,
   upsertRule,
-  upsertProviderSeason,
-  getProviderSeason,
   getRuleById,
   deleteRule,
   getTorrentByHash,
@@ -23,12 +21,8 @@ import {
   listRecentActivity,
 } from '../../../db/repositories/index.js';
 import { toConflictError } from '../../../db/errors.js';
-import {
-  searchTitles,
-  fetchExternalIds,
-  fetchSeasonDetails,
-  resolveTitleIds,
-} from '../../../metadata/tmdb.js';
+import { searchTitles, fetchExternalIds, resolveTitleIds } from '../../../metadata/tmdb.js';
+import { getOrRefreshProviderSeason } from '../../../metadata/providerSeasonCache.js';
 import { runIngestDeduped, pollFeedDeduped, resolveTitleMatch } from '../../../ingest/pipeline.js';
 import { rebuildMappingsForRule } from '../../../ingest/materialize.js';
 import { downloadFeedEntry } from '../../../ingest/downloadFeedEntry.js';
@@ -586,25 +580,19 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Cache TMDB season details if TMDB ID is available -- check the cache
-    // first (§5.4: "cache aggressively... these change rarely"). Without
-    // this, every rule saved against the same show+season re-fetches
-    // identical data live from TMDB, e.g. once per torrent for a
-    // one-torrent-per-episode show.
+    // first (self-healing: see providerSeasonCache.ts). Without this, every
+    // rule saved against the same show+season re-fetches identical data live
+    // from TMDB, e.g. once per torrent for a one-torrent-per-episode show;
+    // the episode numbers a human just assigned via `exceptions` are passed
+    // through so a cache that predates this episode gets refreshed rather
+    // than left stale.
     if (body.title?.tmdbId) {
+      const requiredEpisodes = Object.values(body.exceptions)
+        .filter((e): e is { season: number; episode: number } => e !== 'ignore')
+        .filter((e) => e.season === body.season)
+        .map((e) => e.episode);
       try {
-        const cached = await getProviderSeason(titleId, body.season, 'tmdb');
-        if (!cached) {
-          const episodes = await fetchSeasonDetails(body.title.tmdbId, body.season);
-          if (episodes.length > 0) {
-            await upsertProviderSeason({
-              title_id: titleId,
-              season: body.season,
-              source: 'tmdb',
-              episode_count: episodes.length,
-              episodes: episodes,
-            });
-          }
-        }
+        await getOrRefreshProviderSeason(titleId, body.title.tmdbId, body.season, requiredEpisodes);
       } catch (err) {
         app.log.warn(
           { err, tmdbId: body.title.tmdbId, season: body.season },

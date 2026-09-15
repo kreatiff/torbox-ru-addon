@@ -21,7 +21,7 @@ import {
   listAll as listAllTitles,
   type Title,
 } from '../db/repositories/titlesRepo.js';
-import { getProviderSeason, upsertProviderSeason } from '../db/repositories/providerSeasonsRepo.js';
+import { getOrRefreshProviderSeason } from '../metadata/providerSeasonCache.js';
 import {
   filterExistingTopicIds,
   upsertFeedEntry,
@@ -40,12 +40,7 @@ import { upsertRule } from '../db/repositories/rulesRepo.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
 import { isVideoFile } from './isVideoFile.js';
 import type { TitleMatch } from '../resolve/confidence.js';
-import {
-  fetchExternalIds,
-  fetchSeasonDetails,
-  searchTitles,
-  type TmdbSearchResult,
-} from '../metadata/tmdb.js';
+import { fetchExternalIds, searchTitles, type TmdbSearchResult } from '../metadata/tmdb.js';
 import { extractEpisodes, type LlmExtraction } from '../llm/opencodeZen.js';
 import { fetchFeed, matchEntries } from '../rutracker/index.js';
 
@@ -113,7 +108,7 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
     (await findTitleByCleanedName(llm.title)) ??
     (llm.titleEn ? await findTitleByCleanedName(llm.titleEn) : null);
   if (existing) {
-    return { title: existing, titleMatch: await toTitleMatch(existing, llm.season) };
+    return { title: existing, titleMatch: await toTitleMatch(existing, llm) };
   }
 
   // Same title-then-titleEn fallback as the DB lookup above: a
@@ -162,7 +157,7 @@ export async function resolveTitleMatch(llm: LlmExtraction): Promise<TitleResolu
     posterUrl: match.posterUrl ?? null,
   });
 
-  return { title: created, titleMatch: await toTitleMatch(created, llm.season) };
+  return { title: created, titleMatch: await toTitleMatch(created, llm) };
 }
 
 /** When the LLM gave a year, prefer TMDB's top result whose year matches
@@ -184,8 +179,8 @@ function pickBestTmdbMatch(
   return results[0] ?? null;
 }
 
-async function toTitleMatch(title: Title, season: number): Promise<TitleMatch> {
-  const tmdbSeasons = await fetchTmdbSeason(title.id, title.tmdbId, season);
+async function toTitleMatch(title: Title, llm: LlmExtraction): Promise<TitleMatch> {
+  const tmdbSeasons = await fetchTmdbSeason(title.id, title.tmdbId, llm);
   return {
     titleId: title.id,
     nameRu: title.nameRu,
@@ -194,55 +189,35 @@ async function toTitleMatch(title: Title, season: number): Promise<TitleMatch> {
   };
 }
 
+/**
+ * Wraps getOrRefreshProviderSeason with the episode numbers this specific
+ * LLM extraction needs, so a torrent carrying an episode the cache hasn't
+ * seen yet (e.g. this week's new episode of an airing show) forces a live
+ * TMDB re-fetch instead of trusting a stale cached season list -- see
+ * providerSeasonCache.ts for why that distinction matters.
+ */
 async function fetchTmdbSeason(
   titleId: string,
   tmdbId: number | null,
-  season: number,
+  llm: LlmExtraction,
 ): Promise<TitleMatch['seasons']> {
   if (!tmdbId) {
     return [];
   }
-  const cached = await getProviderSeason(titleId, season, 'tmdb');
-  if (cached) {
-    return [
-      {
-        season: cached.season,
-        episode_count: cached.episode_count,
-        episodes: cached.episodes.map((e) => ({
-          episode: e.episode,
-          air_date: e.air_date ?? null,
-        })),
-      },
-    ];
+  const requiredEpisodes = llm.files
+    .map((f) => f.episode)
+    .filter((ep): ep is number => ep !== null);
+  const row = await getOrRefreshProviderSeason(titleId, tmdbId, llm.season, requiredEpisodes);
+  if (!row) {
+    return [];
   }
-  try {
-    const episodes = await fetchSeasonDetails(tmdbId, season);
-    if (episodes.length > 0) {
-      const saved = await upsertProviderSeason({
-        title_id: titleId,
-        season,
-        source: 'tmdb',
-        episode_count: episodes.length,
-        episodes: episodes.map((e) => ({ episode: e.episode, air_date: e.air_date ?? null })),
-      });
-      return [
-        {
-          season: saved.season,
-          episode_count: saved.episode_count,
-          episodes: saved.episodes.map((e) => ({
-            episode: e.episode,
-            air_date: e.air_date ?? null,
-          })),
-        },
-      ];
-    }
-  } catch (err) {
-    logger.warn(
-      { err, titleId, tmdbId, season },
-      'Failed to fetch TMDB season for auto-proposed title',
-    );
-  }
-  return [];
+  return [
+    {
+      season: row.season,
+      episode_count: row.episode_count,
+      episodes: row.episodes.map((e) => ({ episode: e.episode, air_date: e.air_date ?? null })),
+    },
+  ];
 }
 
 export interface PollFeedResult {
