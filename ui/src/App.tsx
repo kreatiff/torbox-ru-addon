@@ -531,6 +531,9 @@ function AdminApp() {
   // mutation results. Destructive actions still use window.confirm() before
   // firing -- toasts are for after-the-fact notice, not confirmation.
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // Mobile-only: the sidebar footer's account info, surfaced via the top
+  // bar's avatar button instead (the sidebar is hidden below 769px).
+  const [accountSheetOpen, setAccountSheetOpen] = useState(false);
   const showToast = (message: string, variant: ToastMessage['variant'] = 'success') => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, variant }]);
@@ -956,6 +959,24 @@ function AdminApp() {
         </div>
       </div>
 
+      {/* Mobile top bar -- replaces the sidebar header below 769px; see
+          index.css's "Mobile / responsive" section. */}
+      <div className="mobile-topbar">
+        <div className="mobile-topbar-brand">
+          <div className="sidebar-brand-mark">
+            <Box size={16} />
+          </div>
+          <h1>TorBox RU Addon</h1>
+        </div>
+        <button
+          className="mobile-avatar-btn"
+          onClick={() => setAccountSheetOpen(true)}
+          aria-label="Account"
+        >
+          {user?.email ? user.email.charAt(0).toUpperCase() : <LogOut size={16} />}
+        </button>
+      </div>
+
       {/* Main Content Area */}
       <div className="main-content">
         {activeTab === 'queue' && (
@@ -1034,6 +1055,108 @@ function AdminApp() {
           />
         )}
       </div>
+
+      {/* Bottom tab bar -- mobile-only equivalent of the sidebar menu. */}
+      <nav className="bottom-nav">
+        <div className="bottom-nav-inner">
+          <button
+            className={`bottom-nav-item ${activeTab === 'queue' ? 'active' : ''}`}
+            onClick={() => setActiveTab('queue')}
+          >
+            <List size={19} />
+            Queue
+            {queue.length > 0 && <span className="bottom-nav-item-badge">{queue.length}</span>}
+          </button>
+          <button
+            className={`bottom-nav-item ${activeTab === 'labeller' ? 'active' : ''}`}
+            onClick={() => {
+              if (selectedTorrentHash) {
+                setActiveTab('labeller');
+              } else {
+                showToast('Please select a torrent from the Queue first.', 'error');
+              }
+            }}
+          >
+            <Tag size={19} />
+            Labeller
+          </button>
+          <button
+            className={`bottom-nav-item ${activeTab === 'library' ? 'active' : ''}`}
+            onClick={() => setActiveTab('library')}
+          >
+            <FolderOpen size={19} />
+            Library
+          </button>
+          <button
+            className={`bottom-nav-item ${activeTab === 'health' ? 'active' : ''}`}
+            onClick={() => setActiveTab('health')}
+          >
+            <Activity size={19} />
+            Health
+          </button>
+          <button
+            className={`bottom-nav-item ${activeTab === 'feed' ? 'active' : ''}`}
+            onClick={() => setActiveTab('feed')}
+          >
+            <Rss size={19} />
+            Feed
+            {feed.filter((f) => !f.downloadedAt).length > 0 && (
+              <span className="bottom-nav-item-badge">
+                {feed.filter((f) => !f.downloadedAt).length}
+              </span>
+            )}
+          </button>
+        </div>
+      </nav>
+
+      {/* Account sheet (mobile) -- the sidebar footer's user/sign-out info,
+          reachable via the top bar's avatar button since the sidebar itself
+          is hidden below 769px. Reuses the modal/bottom-sheet styling. */}
+      {accountSheetOpen && (
+        <div className="modal-overlay" onClick={() => setAccountSheetOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Account</h3>
+              <button className="icon-btn" onClick={() => setAccountSheetOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              {user?.email && (
+                <div className="form-group">
+                  <label>Signed in as</label>
+                  <div style={{ fontSize: '14px', wordBreak: 'break-all' }}>{user.email}</div>
+                </div>
+              )}
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Status</label>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {health?.lastIngestRun
+                    ? `Last ingested ${new Date(health.lastIngestRun).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}`
+                    : 'Never ingested'}{' '}
+                  • v0.1.0
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-secondary"
+                style={{ width: '100%' }}
+                onClick={() => {
+                  setAccountSheetOpen(false);
+                  logout();
+                }}
+              >
+                <LogOut size={14} style={{ marginRight: '6px' }} />
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add/Edit Title modal (Library view) */}
       {titleModal && (
@@ -1127,7 +1250,7 @@ function QueueView({
             style={{ paddingLeft: '28px' }}
           />
         </div>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <span className="kbd-hint" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           Use <kbd>j</kbd>/<kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open, <kbd>a</kbd> to
           quick-approve
         </span>
@@ -1207,6 +1330,7 @@ function QueueView({
                   >
                     <td
                       className="mono"
+                      data-label="Torrent Name"
                       style={{
                         maxWidth: '400px',
                         overflow: 'hidden',
@@ -1216,10 +1340,14 @@ function QueueView({
                     >
                       {highlightHomoglyphs(item.rawNameAtIngest)}
                     </td>
-                    <td className="col-center">{item.fileCount}</td>
-                    <td>{item.proposal?.proposedTitle || '-'}</td>
-                    <td className="col-center">{item.proposal?.proposedSeason ?? '-'}</td>
-                    <td className="col-center">
+                    <td className="col-center" data-label="Files">
+                      {item.fileCount}
+                    </td>
+                    <td data-label="Proposed Show Mapping">{item.proposal?.proposedTitle || '-'}</td>
+                    <td className="col-center" data-label="Season">
+                      {item.proposal?.proposedSeason ?? '-'}
+                    </td>
+                    <td className="col-center" data-label="Confidence">
                       <span
                         className={`badge ${
                           item.proposal?.confidence >= 0.8
@@ -1495,7 +1623,7 @@ function LabellerView({
             </span>
           )}
         </h2>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div className="view-header-actions" style={{ gap: '8px' }}>
           <button className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
@@ -1750,7 +1878,10 @@ function LabellerView({
               )}
 
               {/* Controls layout */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div
+                className="labeller-controls-grid"
+                style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}
+              >
                 <div className="form-group">
                   <label>Season</label>
                   <input
@@ -2203,7 +2334,7 @@ function LibraryView({ library, isLoading, onEditRule, onAddTitle, onEditTitle }
     <>
       <div className="view-header">
         <h2>Seeded & Mapped Library</h2>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div className="view-header-actions" style={{ gap: '8px' }}>
           <div style={{ position: 'relative' }}>
             <Search
               size={14}
@@ -2426,18 +2557,23 @@ function HealthView({
     <>
       <div className="view-header">
         <h2>System Health Dashboard</h2>
-        <button
-          className="btn btn-primary"
-          onClick={() => triggerIngest.mutate()}
-          disabled={triggerIngest.isPending}
-        >
-          {triggerIngest.isPending ? 'Ingesting...' : 'Trigger Ingest Run Now'}
-        </button>
+        <div className="view-header-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => triggerIngest.mutate()}
+            disabled={triggerIngest.isPending}
+          >
+            {triggerIngest.isPending ? 'Ingesting...' : 'Trigger Ingest Run Now'}
+          </button>
+        </div>
       </div>
 
       <div className="view-body" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {/* Row of stats cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+        <div
+          className="stat-grid"
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}
+        >
           <div className="stat-card">
             <div className="stat-card-icon stat-card-icon-info">
               <Clock size={20} />
@@ -2487,7 +2623,10 @@ function HealthView({
         </div>
 
         {/* Gone list & Play log split */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+        <div
+          className="health-columns"
+          style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}
+        >
           {/* Gone List */}
           <div className="panel">
             <div className="panel-header">
@@ -2561,6 +2700,7 @@ function HealthView({
                     {health.recentPlays.map((p) => (
                       <tr key={p.id}>
                         <td
+                          data-label="Time"
                           style={{
                             whiteSpace: 'nowrap',
                             fontSize: '11px',
@@ -2569,12 +2709,13 @@ function HealthView({
                         >
                           {new Date(p.at).toLocaleTimeString()}
                         </td>
-                        <td>{p.titleRu}</td>
-                        <td style={{ fontWeight: 'bold' }}>
+                        <td data-label="Show">{p.titleRu}</td>
+                        <td data-label="Episode" style={{ fontWeight: 'bold' }}>
                           S{String(p.season).padStart(2, '0')}E{String(p.episode).padStart(2, '0')}
                         </td>
                         <td
                           className="mono"
+                          data-label="Filename"
                           style={{
                             fontSize: '11px',
                             maxWidth: '300px',
@@ -2688,15 +2829,17 @@ function HealthView({
                   <tbody>
                     {nonRussianAudit.flagged.map((t) => (
                       <tr key={t.id}>
-                        <td>
+                        <td data-label="Title">
                           {t.nameRu}
                           {t.nameEn ? (
                             <span style={{ color: 'var(--text-muted)' }}> ({t.nameEn})</span>
                           ) : null}
                         </td>
-                        <td className="mono">{t.originalLanguage ?? 'unknown'}</td>
-                        <td>{t.ruleCount}</td>
-                        <td>{t.mappingCount}</td>
+                        <td className="mono" data-label="Lang">
+                          {t.originalLanguage ?? 'unknown'}
+                        </td>
+                        <td data-label="Rules">{t.ruleCount}</td>
+                        <td data-label="Mappings">{t.mappingCount}</td>
                         <td>
                           <button
                             className="icon-btn"
@@ -2798,7 +2941,7 @@ function FeedView({
               <tbody>
                 {feed.map((item) => (
                   <tr key={item.topicId}>
-                    <td style={{ minWidth: '220px' }}>
+                    <td data-label="Show" style={{ minWidth: '220px' }}>
                       {item.titleName ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 'bold' }}>{item.titleName}</span>
@@ -2821,12 +2964,15 @@ function FeedView({
                         />
                       )}
                     </td>
-                    <td className="mono" style={{ fontSize: '12px' }}>
+                    <td className="mono" data-label="Raw Title" style={{ fontSize: '12px' }}>
                       <a href={item.url} target="_blank" rel="noreferrer">
                         {item.rawTitle} <ExternalLink size={11} style={{ verticalAlign: 'middle' }} />
                       </a>
                     </td>
-                    <td style={{ whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <td
+                      data-label="Last Updated"
+                      style={{ whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--text-muted)' }}
+                    >
                       {new Date(item.lastUpdated).toLocaleString()}
                     </td>
                     <td>

@@ -64,13 +64,16 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   background-color: var(--bg-main);
   background-image: radial-gradient(circle at 15% -10%, rgba(51, 154, 240, 0.05), transparent 40%);
+  overscroll-behavior-y: none;
 }
 
 #root {
   width: 100vw;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
 }
 
@@ -123,7 +126,17 @@ kbd {
   display: flex;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+}
+
+/* Chrome shown only on narrow viewports -- built and styled below in the
+   "Mobile / responsive" section, but defined here as JSX so it always
+   renders; display is toggled entirely by that section's media query so
+   there's never a layout flash while CSS loads. */
+.mobile-topbar,
+.bottom-nav {
+  display: none;
 }
 
 .sidebar {
@@ -217,8 +230,9 @@ kbd {
   padding: 14px 16px;
   border-top: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .main-content {
@@ -1081,4 +1095,377 @@ input:focus, select:focus, textarea:focus {
   color: var(--text-dim);
   margin-top: 4px;
   display: block;
+}
+
+/* ==========================================================================
+   Mobile / responsive
+   The desktop sidebar + dense tables above stay exactly as they are at
+   >=769px. Below that, a top bar + bottom tab bar replace the sidebar, and
+   table-based lists reflow into tappable cards. Everything here is additive
+   (new classes, or overrides scoped to the media query) rather than a
+   rewrite of the desktop rules above.
+   ========================================================================== */
+
+.mobile-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mobile-topbar-brand h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-avatar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--accent-info), #1864ab);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bottom-nav-inner {
+  display: flex;
+}
+
+.bottom-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 54px;
+  padding: 7px 2px 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s var(--ease);
+}
+
+.bottom-nav-item.active {
+  color: var(--accent-info);
+}
+
+.bottom-nav-item-badge {
+  position: absolute;
+  top: 3px;
+  right: calc(50% - 20px);
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 100px;
+  background-color: var(--accent-danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg-surface);
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    padding-top: max(10px, env(safe-area-inset-top, 0px));
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 30;
+  }
+
+  .bottom-nav {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    flex-shrink: 0;
+    background-color: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.3);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    z-index: 30;
+  }
+
+  .main-content {
+    min-height: 0;
+  }
+
+  /* Per-view header: title + actions stack instead of fighting for one row. */
+  .view-header {
+    padding: 14px 16px;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .view-header h2 {
+    font-size: 16px;
+  }
+
+  .view-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .view-header-actions > div[style*='position: relative'],
+  .view-header-actions .filter-input {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .filter-input {
+    width: 100%;
+  }
+
+  .view-header-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  /* Keyboard-shortcut hints only make sense with a physical keyboard. */
+  .kbd-hint {
+    display: none;
+  }
+
+  .view-body {
+    padding: 14px;
+    padding-bottom: 24px;
+  }
+
+  .btn {
+    min-height: 40px;
+    padding: 9px 16px;
+  }
+
+  .icon-btn {
+    min-width: 38px;
+    min-height: 38px;
+  }
+
+  /* Library grid already responds via auto-fill; just tighten the gutter. */
+  .library-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  /* Labeller: two panes stack, each scrolling within its own budget instead
+     of splitting a fixed-height row down the middle. */
+  .labeller-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+    gap: 14px;
+  }
+
+  .labeller-pane {
+    max-height: 60vh;
+  }
+
+  /* Toasts: full-width band above the bottom nav instead of a floating
+     bottom-right stack that a thumb can't comfortably reach or dismiss. */
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .toast {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  /* Modals become bottom sheets: full-width, anchored to the bottom edge,
+     rounded on the top corners only, with a drag-handle affordance. */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-width: none;
+    max-height: 88vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: sheet-in 0.22s var(--ease);
+    position: relative;
+  }
+
+  .modal::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 100px;
+    background-color: var(--border-focus);
+  }
+
+  .modal-header {
+    padding-top: 22px;
+  }
+
+  /* These grids are built with an inline gridTemplateColumns (the desktop
+     column count varies per grid, so it's set at the call site) --
+     !important is required here to actually win over that inline style,
+     not just stylesheet specificity. Stat cards stay a compact 2x2 (each
+     is small and short); the rest -- form fields, wide panels -- go full
+     width, since a column would leave them too narrow to read. */
+  .form-row,
+  .health-columns {
+    grid-template-columns: 1fr !important;
+  }
+
+  .stat-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .labeller-controls-grid {
+    gap: 10px !important;
+  }
+
+  /* Responsive table -> card list. Scoped to .table-container so the
+     Labeller's compact in-pane file tables (not wrapped in one) are
+     untouched -- those already fit narrow widths as-is. */
+  .table-container {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  .table-container table {
+    display: block;
+  }
+
+  .table-container thead {
+    display: none;
+  }
+
+  .table-container tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .table-container tr {
+    display: block;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+    padding: 4px 14px;
+  }
+
+  .table-container tr.navigating {
+    box-shadow: var(--shadow-xs), inset 3px 0 0 var(--accent-info);
+  }
+
+  /* Label stacked above value (a definition-list shape), not label-left/
+     value-right: a value can be arbitrary JSX -- highlightHomoglyphs alone
+     returns a run of sibling <span>s, not one text node -- and a flex row
+     with justify-content:space-between would treat each of those siblings
+     as its own flex item and space them apart individually. Block flow
+     doesn't have that failure mode, whatever the value contains. */
+  .table-container td {
+    display: block;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-subtle);
+    text-align: left;
+    white-space: normal !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .table-container tr td:last-child {
+    border-bottom: none;
+  }
+
+  .table-container td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    font-size: 10.5px;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-dim);
+  }
+
+  /* A card row with no visible label (e.g. a lone action button) -- let it
+     sit full-width instead of an empty label gap. */
+  .table-container td:not([data-label]) {
+    padding-top: 10px;
+  }
+
+  .table-container td:not([data-label]) .btn {
+    width: 100%;
+    min-height: 40px;
+    font-size: 13px !important;
+    padding: 10px !important;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(16px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Small phones: trim padding further and drop to a 2-up library grid only
+   when there's room (auto-fill already handles this, this just lowers the
+   minmax floor so a 360px-wide screen still gets a poster-visible card). */
+@media (max-width: 420px) {
+  .view-header {
+    padding: 12px 14px;
+  }
+
+  .view-body {
+    padding: 12px;
+  }
+
+  .labeller-controls-grid {
+    grid-template-columns: 1fr !important;
+  }
 }
