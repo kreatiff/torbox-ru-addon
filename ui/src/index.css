@@ -1127,14 +1127,14 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: linear-gradient(135deg, var(--accent-info), #1864ab);
   color: #fff;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1265,14 +1265,46 @@ input:focus, select:focus, textarea:focus {
     padding-bottom: 24px;
   }
 
+  /* 44px is the touch-target floor (Apple HIG / Material both land here)
+     for every tappable control -- set as min-height/min-width so it's a
+     floor, not a fixed size: content-driven or explicitly-padded controls
+     can still grow past it, they just can't go under it. Because these are
+     unset by any of this file's inline `style` overrides (padding/width/
+     font-size, never height), the floor wins there too without needing a
+     single JSX change -- see the elements below for where that matters. */
   .btn {
-    min-height: 40px;
+    min-height: 44px;
+    min-width: 44px;
     padding: 9px 16px;
   }
 
   .icon-btn {
-    min-width: 38px;
-    min-height: 38px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  /* Dropdown/autocomplete rows (TMDB show search, FeedMatchPicker) -- the
+     poster-thumbnail ones already clear 44px from the 45px poster alone,
+     this covers the text-only ones (no poster, or FeedMatchPicker's plain
+     list). */
+  .dropdown-panel-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  /* The Feed table's raw-title link -- an inline <a> whose text alone
+     renders well under 44px tall; flex + min-height turns it into a
+     properly-tall tap band without hand-padding the text. */
+  .table-container td a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
   }
 
   /* Library grid already responds via auto-fill; just tighten the gutter. */
@@ -1436,7 +1468,7 @@ input:focus, select:focus, textarea:focus {
 
   .table-container td:not([data-label]) .btn {
     width: 100%;
-    min-height: 40px;
+    min-height: 44px;
     font-size: 13px !important;
     padding: 10px !important;
   }
