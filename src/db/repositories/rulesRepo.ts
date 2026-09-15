@@ -1,6 +1,8 @@
 import { pool } from '../pool.js';
 import { ruleRowSchema, type RuleRow } from '../schema.types.js';
 import type { Rule } from '../../resolve/types.js';
+import { MEDIUM_SCORE_THRESHOLD } from '../../resolve/confidence.js';
+import { PROVIDER_MISMATCH_REASON_PREFIX } from '../../resolve/proposeRule.js';
 
 /**
  * torrent_hash/title_id have no NOT NULL in §4's DDL (transcribed verbatim —
@@ -54,6 +56,24 @@ export async function listRules(): Promise<Rule[]> {
 }
 
 /**
+ * Queued auto-proposals blocked *only* by episodesWithinProvider (see
+ * PROVIDER_MISMATCH_REASON_PREFIX) -- the one queue reason that can resolve
+ * itself once TMDB's season data catches up, without a human or a fresh LLM
+ * call. Powers the ingest pipeline's automatic queue-retry step
+ * (src/ingest/pipeline.ts's retryQueuedProviderMismatches), which re-checks
+ * these each run and promotes any whose required episodes are now known.
+ */
+export async function listQueuedProviderMismatchRules(): Promise<Rule[]> {
+  const result = await pool.query(
+    `select * from rules
+     where source = 'auto' and confidence < $1 and proposal_reason like $2
+     order by created_at`,
+    [MEDIUM_SCORE_THRESHOLD, `${PROVIDER_MISMATCH_REASON_PREFIX}%`],
+  );
+  return result.rows.map((row) => toRule(ruleRowSchema.parse(row)));
+}
+
+/**
  * `mappings.rule_id` is `on delete cascade` (see the init migration), so
  * this also removes every mapping this rule produced -- used when editing
  * a rule changes its season: the (torrent_hash, season) unique constraint
@@ -66,7 +86,7 @@ export async function deleteRule(id: string): Promise<void> {
 }
 
 export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
-  const result =   await pool.query(
+  const result = await pool.query(
     `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source, proposal_reason, torrent_name)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      on conflict (torrent_hash, season)

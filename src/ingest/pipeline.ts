@@ -18,6 +18,7 @@ import {
 import {
   findOrCreateTitle,
   findTitleByCleanedName,
+  getTitleById,
   listAll as listAllTitles,
   type Title,
 } from '../db/repositories/titlesRepo.js';
@@ -35,8 +36,9 @@ import {
   type ProcessedEpisodeNotification,
 } from '../notify/discord.js';
 import { logActivity } from '../db/repositories/activityLogRepo.js';
-import { proposeRule } from '../resolve/proposeRule.js';
-import { upsertRule } from '../db/repositories/rulesRepo.js';
+import { proposeRule, COMMIT_CONFIDENCE } from '../resolve/proposeRule.js';
+import { upsertRule, listQueuedProviderMismatchRules } from '../db/repositories/rulesRepo.js';
+import type { RuleException } from '../resolve/types.js';
 import { rebuildAllMappings, rebuildMappingsForRule } from './materialize.js';
 import { isVideoFile } from './isVideoFile.js';
 import type { TitleMatch } from '../resolve/confidence.js';
@@ -57,6 +59,8 @@ export interface IngestSummary {
   proposalsCreated: number;
   proposalsAutoCommitted: number;
   proposalsQueued: number;
+  queuedProviderMismatchesChecked: number;
+  queuedProviderMismatchesPromoted: number;
   rulesRebuilt: number;
   rulesFailed: number;
 }
@@ -218,6 +222,108 @@ async function fetchTmdbSeason(
       episodes: row.episodes.map((e) => ({ episode: e.episode, air_date: e.air_date ?? null })),
     },
   ];
+}
+
+interface QueuedRetryResult {
+  checked: number;
+  promoted: number;
+  notifications: ProcessedEpisodeNotification[];
+}
+
+/** The season/episode pairs a 'manual'-numbering rule's exceptions assign
+ * for one particular season -- what expandManual actually maps from, and
+ * so exactly what needs to be "known" to TMDB before a queued
+ * provider-mismatch rule can be promoted. */
+function requiredEpisodesForSeason(
+  exceptions: Record<string, RuleException>,
+  season: number,
+): number[] {
+  return Object.values(exceptions)
+    .filter((e): e is { season: number; episode: number } => e !== 'ignore' && e.season === season)
+    .map((e) => e.episode);
+}
+
+/**
+ * Re-checks every rule queued solely because episodesWithinProvider
+ * rejected it (PROVIDER_MISMATCH_REASON_PREFIX) and promotes any whose
+ * required episodes TMDB now lists. These rules already carry a full
+ * per-file episode assignment from their original LLM run (proposeRule
+ * always emits `numbering: 'manual'` -- see numbering.ts's expandManual),
+ * so promoting one needs no new LLM call: just a fresh TMDB season lookup
+ * (via getOrRefreshProviderSeason, which only hits the network when the
+ * cached row doesn't already cover what's required) and a mapping rebuild.
+ * Runs every ingest cycle, same cadence as everything else in runIngest --
+ * cheap when nothing has changed, since a season that still doesn't cover
+ * the required episode(s) just means one more TMDB call next time.
+ */
+async function retryQueuedProviderMismatches(): Promise<QueuedRetryResult> {
+  const queued = await listQueuedProviderMismatchRules();
+  let promoted = 0;
+  const notifications: ProcessedEpisodeNotification[] = [];
+
+  for (const rule of queued) {
+    if (!rule.titleId) {
+      continue;
+    }
+    const title = await getTitleById(rule.titleId);
+    if (!title) {
+      continue;
+    }
+
+    const requiredEpisodes = requiredEpisodesForSeason(rule.exceptions, rule.season);
+    if (requiredEpisodes.length === 0) {
+      continue;
+    }
+
+    const row = await getOrRefreshProviderSeason(
+      rule.titleId,
+      title.tmdbId,
+      rule.season,
+      requiredEpisodes,
+    );
+    const known = new Set((row?.episodes ?? []).map((e) => e.episode));
+    if (!requiredEpisodes.every((ep) => known.has(ep))) {
+      continue;
+    }
+
+    try {
+      const savedRule = await upsertRule({
+        torrentHash: rule.torrentHash,
+        titleId: rule.titleId,
+        season: rule.season,
+        numbering: rule.numbering,
+        sort: rule.sort,
+        startEpisode: rule.startEpisode,
+        absoluteOffset: rule.absoluteOffset,
+        exceptions: rule.exceptions,
+        confidence: COMMIT_CONFIDENCE,
+        source: rule.source,
+        proposalReason: `Auto-recovered: TMDB now lists season ${rule.season} episode(s) ${requiredEpisodes.join(', ')} that were missing when this torrent first queued.`,
+        torrentName: rule.torrentName,
+      });
+      const mappings = await rebuildMappingsForRule(savedRule.id);
+      promoted++;
+
+      const episodesBySeason = new Map<number, Set<number>>();
+      for (const m of mappings) {
+        const episodes = episodesBySeason.get(m.season) ?? new Set<number>();
+        episodes.add(m.episode);
+        episodesBySeason.set(m.season, episodes);
+      }
+      for (const [season, episodes] of episodesBySeason) {
+        const episodeList = [...episodes];
+        notifications.push({ titleName: title.nameRu, season, episodes: episodeList });
+        await logActivity(
+          'torbox',
+          `${title.nameRu} — ${formatEpisodeRange(season, episodeList)} processed and added to the library (was queued waiting on TMDB).`,
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, ruleId: rule.id }, 'failed to promote queued provider-mismatch rule');
+    }
+  }
+
+  return { checked: queued.length, promoted, notifications };
 }
 
 export interface PollFeedResult {
@@ -499,6 +605,17 @@ export async function runIngest(): Promise<IngestSummary> {
     );
   }
 
+  // Re-check rules that queued only because TMDB didn't yet list the
+  // episode -- may have caught up since. See retryQueuedProviderMismatches.
+  const queuedRetry = await retryQueuedProviderMismatches();
+  if (queuedRetry.checked > 0) {
+    logger.info(
+      { checked: queuedRetry.checked, promoted: queuedRetry.promoted },
+      'queued provider-mismatch rules re-checked',
+    );
+  }
+  processedForNotification.push(...queuedRetry.notifications);
+
   if (processedForNotification.length > 0) {
     await notifyDiscordEpisodesProcessed(processedForNotification);
   }
@@ -521,6 +638,8 @@ export async function runIngest(): Promise<IngestSummary> {
     proposalsCreated,
     proposalsAutoCommitted,
     proposalsQueued,
+    queuedProviderMismatchesChecked: queuedRetry.checked,
+    queuedProviderMismatchesPromoted: queuedRetry.promoted,
     rulesRebuilt,
     rulesFailed,
   };

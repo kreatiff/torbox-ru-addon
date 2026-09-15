@@ -21,8 +21,17 @@ export interface RuleProposalResult {
   tier: ProposalTier;
 }
 
-const COMMIT_CONFIDENCE = 0.9;
+export const COMMIT_CONFIDENCE = 0.9;
 const QUEUE_CONFIDENCE = MEDIUM_SCORE_THRESHOLD - 0.01;
+
+/** Shared with the queue-retry step (src/ingest/pipeline.ts's
+ * retryQueuedProviderMismatches): this exact prefix is how it recognises a
+ * queued rule that was blocked *only* by episodesWithinProvider, as opposed
+ * to a missing title match or an LLM that wasn't confident -- the one queue
+ * reason that resolves itself once TMDB's season data catches up, with no
+ * new LLM call needed to recheck it. */
+export const PROVIDER_MISMATCH_REASON_PREFIX =
+  'Queued: LLM-assigned episode numbers fall outside the known season ';
 
 /**
  * Builds this rule's `exceptions` map from the LLM's per-file episode
@@ -103,7 +112,8 @@ export function proposeRule(
         exceptions: {},
         confidence: 0,
         source: 'auto',
-        proposalReason: 'Queued: LLM extraction unavailable (no API key configured, or the call failed).',
+        proposalReason:
+          'Queued: LLM extraction unavailable (no API key configured, or the call failed).',
         torrentName: torrent.rawNameAtIngest,
       },
       tier: 'queue',
@@ -125,7 +135,7 @@ export function proposeRule(
     proposalReason = 'Queued: LLM extraction did not cover every video file.';
   } else if (!withinProvider) {
     tier = 'queue';
-    proposalReason = `Queued: LLM-assigned episode numbers fall outside the known season ${llm.season} episode list.`;
+    proposalReason = `${PROVIDER_MISMATCH_REASON_PREFIX}${llm.season} episode list.`;
   } else if (!llm.confident) {
     tier = 'queue';
     proposalReason = `Queued: ${llm.reasoning}`;
