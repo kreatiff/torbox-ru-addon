@@ -1,0 +1,106 @@
+name: CI
+
+# Runs on every branch except dev, and on pull requests. dev is deliberately
+# excluded here because docker-publish.yml already calls this workflow via
+# `workflow_call` to gate its image build -- without the exclusion a push to
+# dev would run the whole suite twice in parallel against two Postgres
+# services for no benefit.
+on:
+  push:
+    branches-ignore: [dev]
+  pull_request:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Backend (typecheck, lint, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Postgres 16, matching docker-compose.yml. Setting TEST_DATABASE_URL is
+    # what un-skips the ~150 `describe.skipIf(!hasTestDb)` integration tests
+    # (test/db/testDb.ts) -- without it they silently no-op, which is how
+    # this suite spent its life until this workflow existed.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: torboxru_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/torboxru_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # test/db/testDb.ts expects the migrations to be applied already. This
+      # is `npm run migrate:up` minus its `--env-file=.env` (there's no .env
+      # in CI); src/config.ts validates the whole env eagerly on import, so
+      # every required var needs a value here even though only DATABASE_URL
+      # is actually used to connect. The test run itself doesn't need these
+      # -- test/setup.ts supplies its own defaults.
+      - name: Apply migrations to the test database
+        run: npx tsx -e "import('./src/db/migrate.ts').then((m) => m.migrateUp())"
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/torboxru_test
+          TORBOX_API_KEY: ci-placeholder
+          ADDON_TOKEN: ci-placeholder
+          PUBLIC_BASE: http://localhost:3000
+          GOOGLE_CLIENT_ID: ci-placeholder
+          GOOGLE_CLIENT_SECRET: ci-placeholder
+          SESSION_SECRET: ci-placeholder-session-secret-at-least-32-bytes
+          ALLOWED_EMAILS: ci@example.com
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm test
+
+  ui:
+    name: Admin UI (lint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - run: npm ci
+        working-directory: ui
+
+      - run: npm run lint
+        working-directory: ui
+
+      # `tsc -b && vite build` -- this is the UI's typecheck as well as its
+      # bundle. Needs the sibling src/ tree on disk (App.tsx imports
+      # resolve/expandRule.ts directly), which the checkout above provides.
+      - run: npm run build
+        working-directory: ui

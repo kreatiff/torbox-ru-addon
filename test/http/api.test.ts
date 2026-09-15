@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { build } from '../../src/http/server.js';
+import { config } from '../../src/config.js';
 import {
   searchTitles,
   fetchExternalIds,

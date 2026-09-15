@@ -19,7 +19,15 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Gate: no image reaches GHCR without the full suite (including the
+  # Postgres-backed integration tests) passing on the exact commit being
+  # published. Reuses ci.yml rather than duplicating the job here, which is
+  # also why ci.yml skips dev on push -- see its own comment.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   build-and-push:
+    needs: ci
     runs-on: ubuntu-latest
     # Safety net for the QEMU-emulation crash class documented in the
     # Dockerfile/docs/decisions.md: a crashed-but-not-exited qemu process can
