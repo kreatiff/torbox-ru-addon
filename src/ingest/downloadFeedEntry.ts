@@ -7,8 +7,7 @@ import { parseFeedEntrySeasonEpisode } from '../rutracker/parseFeedEntryEpisode.
 import { addTorrentMagnet } from '../torbox/client.js';
 
 export type DownloadFeedEntryResult =
-  | { ok: true; alreadyDownloaded: boolean; rawTitle: string }
-  | { ok: false; error: string };
+  { ok: true; alreadyDownloaded: boolean; rawTitle: string } | { ok: false; error: string };
 
 const MAGNET_HASH_REGEX = /btih:([a-f0-9]{40})/i;
 
@@ -94,13 +93,17 @@ async function preMapIfPossible(
       confidence: 1.0,
       source: 'auto',
       proposalReason: 'Pre-mapped at download time from the RuTracker feed entry title',
+      queueReason: null,
       torrentName: rawTitle,
     });
     logger.info({ hash, titleId, season, episode }, 'pre-mapped torrent ahead of ingest');
   } catch (err) {
     // Never fail the download over this -- it's a nice-to-have, and the
     // torrent still gets a normal shot at auto-proposal once ingested.
-    logger.warn({ err, hash, titleId }, 'Failed to pre-map torrent; will fall through to normal ingest');
+    logger.warn(
+      { err, hash, titleId },
+      'Failed to pre-map torrent; will fall through to normal ingest',
+    );
   }
 }
 
@@ -138,7 +141,13 @@ export async function downloadFeedEntry(topicId: number): Promise<DownloadFeedEn
     return { ok: false, error: 'TorBox rejected the magnet link -- see server logs' };
   }
 
-  await preMapIfPossible(magnetResult.magnet, torboxHash, torboxTorrentId, entry.titleId, entry.rawTitle);
+  await preMapIfPossible(
+    magnetResult.magnet,
+    torboxHash,
+    torboxTorrentId,
+    entry.titleId,
+    entry.rawTitle,
+  );
 
   await markDownloaded(topicId);
   return { ok: true, alreadyDownloaded: false, rawTitle: entry.rawTitle };

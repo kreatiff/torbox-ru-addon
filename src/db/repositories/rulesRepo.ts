@@ -1,8 +1,6 @@
 import { pool } from '../pool.js';
 import { ruleRowSchema, type RuleRow } from '../schema.types.js';
 import type { Rule } from '../../resolve/types.js';
-import { MEDIUM_SCORE_THRESHOLD } from '../../resolve/confidence.js';
-import { PROVIDER_MISMATCH_REASON_PREFIX } from '../../resolve/proposeRule.js';
 
 /**
  * torrent_hash/title_id have no NOT NULL in §4's DDL (transcribed verbatim —
@@ -28,6 +26,7 @@ function toRule(row: RuleRow): Rule {
     confidence: row.confidence,
     source: row.source,
     proposalReason: row.proposal_reason ?? null,
+    queueReason: row.queue_reason ?? null,
     torrentName: row.torrent_name ?? null,
   };
 }
@@ -56,19 +55,20 @@ export async function listRules(): Promise<Rule[]> {
 }
 
 /**
- * Queued auto-proposals blocked *only* by episodesWithinProvider (see
- * PROVIDER_MISMATCH_REASON_PREFIX) -- the one queue reason that can resolve
- * itself once TMDB's season data catches up, without a human or a fresh LLM
- * call. Powers the ingest pipeline's automatic queue-retry step
- * (src/ingest/pipeline.ts's retryQueuedProviderMismatches), which re-checks
- * these each run and promotes any whose required episodes are now known.
+ * Rules still queued because episodesWithinProvider rejected them -- the one
+ * queue reason that can resolve itself once TMDB's season data catches up,
+ * without a human or a fresh LLM call. Powers the ingest pipeline's automatic
+ * queue-retry step (src/ingest/pipeline.ts's retryQueuedProviderMismatches),
+ * which re-checks these each run and promotes any whose required episodes are
+ * now known.
+ *
+ * queue_reason alone is the whole predicate: it is non-null only while a rule
+ * is queued (see QueueReason in src/resolve/types.ts), so there's no need to
+ * re-derive that from source/confidence here.
  */
 export async function listQueuedProviderMismatchRules(): Promise<Rule[]> {
   const result = await pool.query(
-    `select * from rules
-     where source = 'auto' and confidence < $1 and proposal_reason like $2
-     order by created_at`,
-    [MEDIUM_SCORE_THRESHOLD, `${PROVIDER_MISMATCH_REASON_PREFIX}%`],
+    `select * from rules where queue_reason = 'provider_mismatch' order by created_at`,
   );
   return result.rows.map((row) => toRule(ruleRowSchema.parse(row)));
 }
@@ -87,8 +87,8 @@ export async function deleteRule(id: string): Promise<void> {
 
 export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
   const result = await pool.query(
-    `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source, proposal_reason, torrent_name)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, absolute_offset, exceptions, confidence, source, proposal_reason, queue_reason, torrent_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      on conflict (torrent_hash, season)
      do update set
        title_id = excluded.title_id,
@@ -100,6 +100,7 @@ export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
        confidence = excluded.confidence,
        source = excluded.source,
        proposal_reason = excluded.proposal_reason,
+       queue_reason = excluded.queue_reason,
        torrent_name = excluded.torrent_name
        -- created_at is intentionally left unchanged: it records when the rule was first created
      returning *`,
@@ -115,6 +116,7 @@ export async function upsertRule(ruleData: Omit<Rule, 'id'>): Promise<Rule> {
       ruleData.confidence,
       ruleData.source,
       ruleData.proposalReason,
+      ruleData.queueReason,
       ruleData.torrentName,
     ],
   );

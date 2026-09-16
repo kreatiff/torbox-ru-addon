@@ -299,6 +299,9 @@ async function retryQueuedProviderMismatches(): Promise<QueuedRetryResult> {
         confidence: COMMIT_CONFIDENCE,
         source: rule.source,
         proposalReason: `Auto-recovered: TMDB now lists season ${rule.season} episode(s) ${requiredEpisodes.join(', ')} that were missing when this torrent first queued.`,
+        // Out of the Queue, so no longer queued for any reason -- and this
+        // is the write that stops the next run from re-finding it here.
+        queueReason: null,
         torrentName: rule.torrentName,
       });
       const mappings = await rebuildMappingsForRule(savedRule.id);

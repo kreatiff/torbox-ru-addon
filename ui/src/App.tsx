@@ -1538,6 +1538,7 @@ function LabellerView({
     confidence: 1.0,
     source: 'manual',
     proposalReason: null,
+    queueReason: null,
     torrentName: details.rawNameAtIngest,
   };
 

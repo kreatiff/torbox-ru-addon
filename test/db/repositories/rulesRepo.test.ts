@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { hasTestDb, truncateAll } from '../testDb.js';
 import { pool } from '../../../src/db/pool.js';
-import { getRuleById, listRules } from '../../../src/db/repositories/rulesRepo.js';
+import {
+  getRuleById,
+  listRules,
+  listQueuedProviderMismatchRules,
+  upsertRule,
+} from '../../../src/db/repositories/rulesRepo.js';
 
 async function insertTitleAndTorrent(): Promise<{ titleId: string; torrentHash: string }> {
   const title = await pool.query(
@@ -59,5 +64,74 @@ describe.skipIf(!hasTestDb)('rulesRepo', () => {
     const rules = await listRules();
     expect(rules).toHaveLength(2);
     expect(rules.map((r) => r.season)).toEqual([1, 2]);
+  });
+
+  describe('listQueuedProviderMismatchRules', () => {
+    it('returns only rules queued for a provider mismatch, not other queue reasons', async () => {
+      const { titleId, torrentHash } = await insertTitleAndTorrent();
+      await pool.query(
+        `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source, queue_reason)
+         values ($1, $2, 1, 'manual', 'natural', 1, 0.44, 'auto', 'provider_mismatch'),
+                ($1, $2, 2, 'manual', 'natural', 1, 0.44, 'auto', 'no_title_match'),
+                ($1, $2, 3, 'manual', 'natural', 1, 0.44, 'auto', 'llm_not_confident'),
+                ($1, $2, 4, 'manual', 'natural', 1, 0.9,  'auto', null)`,
+        [torrentHash, titleId],
+      );
+
+      const queued = await listQueuedProviderMismatchRules();
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.season).toBe(1);
+      expect(queued[0]?.queueReason).toBe('provider_mismatch');
+    });
+
+    it('stops returning a rule once it is promoted out of the queue', async () => {
+      const { titleId, torrentHash } = await insertTitleAndTorrent();
+      await upsertRule({
+        torrentHash,
+        titleId,
+        season: 2,
+        numbering: 'manual',
+        sort: 'natural',
+        startEpisode: 1,
+        absoluteOffset: null,
+        exceptions: { '1': { season: 2, episode: 11 } },
+        confidence: 0.44,
+        source: 'auto',
+        proposalReason: 'Queued: whatever prose this happens to be',
+        queueReason: 'provider_mismatch',
+        torrentName: 'Тестовое шоу S02',
+      });
+      expect(await listQueuedProviderMismatchRules()).toHaveLength(1);
+
+      // Same (torrent_hash, season), so this upserts over the row above --
+      // the promotion path in retryQueuedProviderMismatches.
+      await upsertRule({
+        torrentHash,
+        titleId,
+        season: 2,
+        numbering: 'manual',
+        sort: 'natural',
+        startEpisode: 1,
+        absoluteOffset: null,
+        exceptions: { '1': { season: 2, episode: 11 } },
+        confidence: 0.9,
+        source: 'auto',
+        proposalReason: 'Auto-recovered: TMDB now lists season 2 episode(s) 11',
+        queueReason: null,
+        torrentName: 'Тестовое шоу S02',
+      });
+      expect(await listQueuedProviderMismatchRules()).toHaveLength(0);
+    });
+
+    it('rejects a queue_reason outside the known set', async () => {
+      const { titleId, torrentHash } = await insertTitleAndTorrent();
+      await expect(
+        pool.query(
+          `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source, queue_reason)
+           values ($1, $2, 1, 'manual', 'natural', 1, 0.44, 'auto', 'not_a_real_reason')`,
+          [torrentHash, titleId],
+        ),
+      ).rejects.toThrow(/rules_queue_reason_check/);
+    });
   });
 });

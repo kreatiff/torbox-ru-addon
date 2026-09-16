@@ -1,4 +1,4 @@
-import type { RuleException, RuleProposal } from './types.js';
+import type { QueueReason, RuleException, RuleProposal } from './types.js';
 import { MEDIUM_SCORE_THRESHOLD, type TitleMatch } from './confidence.js';
 import type { LlmExtraction } from '../llm/opencodeZen.js';
 
@@ -23,15 +23,6 @@ export interface RuleProposalResult {
 
 export const COMMIT_CONFIDENCE = 0.9;
 const QUEUE_CONFIDENCE = MEDIUM_SCORE_THRESHOLD - 0.01;
-
-/** Shared with the queue-retry step (src/ingest/pipeline.ts's
- * retryQueuedProviderMismatches): this exact prefix is how it recognises a
- * queued rule that was blocked *only* by episodesWithinProvider, as opposed
- * to a missing title match or an LLM that wasn't confident -- the one queue
- * reason that resolves itself once TMDB's season data catches up, with no
- * new LLM call needed to recheck it. */
-export const PROVIDER_MISMATCH_REASON_PREFIX =
-  'Queued: LLM-assigned episode numbers fall outside the known season ';
 
 /**
  * Builds this rule's `exceptions` map from the LLM's per-file episode
@@ -114,6 +105,7 @@ export function proposeRule(
         source: 'auto',
         proposalReason:
           'Queued: LLM extraction unavailable (no API key configured, or the call failed).',
+        queueReason: 'llm_unavailable',
         torrentName: torrent.rawNameAtIngest,
       },
       tier: 'queue',
@@ -126,21 +118,30 @@ export function proposeRule(
 
   let tier: ProposalTier;
   let proposalReason: string;
+  // Paired with proposalReason in every branch rather than derived from it
+  // afterwards: the prose is free to be reworded for whoever reads the Queue,
+  // the enum is what code selects on. See QueueReason in ./types.ts.
+  let queueReason: QueueReason | null;
 
   if (titleId === null) {
     tier = 'queue';
+    queueReason = 'no_title_match';
     proposalReason = `Queued: no confident title match for "${llm.title}".`;
   } else if (!allCovered) {
     tier = 'queue';
+    queueReason = 'incomplete_coverage';
     proposalReason = 'Queued: LLM extraction did not cover every video file.';
   } else if (!withinProvider) {
     tier = 'queue';
-    proposalReason = `${PROVIDER_MISMATCH_REASON_PREFIX}${llm.season} episode list.`;
+    queueReason = 'provider_mismatch';
+    proposalReason = `Queued: LLM-assigned episode numbers fall outside the known season ${llm.season} episode list.`;
   } else if (!llm.confident) {
     tier = 'queue';
+    queueReason = 'llm_not_confident';
     proposalReason = `Queued: ${llm.reasoning}`;
   } else {
     tier = 'commit';
+    queueReason = null;
     proposalReason = llm.reasoning;
   }
 
@@ -156,6 +157,7 @@ export function proposeRule(
     confidence: tier === 'commit' ? COMMIT_CONFIDENCE : QUEUE_CONFIDENCE,
     source: 'auto',
     proposalReason,
+    queueReason,
     torrentName: torrent.rawNameAtIngest,
   };
 

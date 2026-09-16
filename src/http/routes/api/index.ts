@@ -632,6 +632,9 @@ export async function apiRoutes(app: FastifyInstance): Promise<void> {
       confidence: 1.0, // Manual rules are 100% confident
       source: 'manual',
       proposalReason: null,
+      // A human accepting or editing a rule takes it out of the Queue, so
+      // whatever reason it was held for no longer applies.
+      queueReason: null,
       torrentName: torrentName ?? null,
     });
 

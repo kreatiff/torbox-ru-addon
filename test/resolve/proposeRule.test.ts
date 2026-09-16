@@ -44,7 +44,12 @@ async function stavkaLlmExtraction(overrides: Partial<LlmExtraction> = {}): Prom
 describe('proposeRule', () => {
   it('commits when the LLM is confident, title resolved, and episodes agree with provider data', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
 
     const { proposal, tier } = proposeRule(
@@ -60,6 +65,7 @@ describe('proposeRule', () => {
     expect(proposal.numbering).toBe('manual');
     expect(proposal.source).toBe('auto');
     expect(proposal.confidence).toBeGreaterThanOrEqual(0.45);
+    expect(proposal.queueReason).toBeNull();
     expect(proposal.exceptions[String(at(files, 0).id)]).toEqual({ season: 2, episode: 1 });
     expect(proposal.exceptions[String(at(files, 9).id)]).toEqual({ season: 2, episode: 10 });
   });
@@ -75,12 +81,18 @@ describe('proposeRule', () => {
     expect(tier).toBe('queue');
     expect(proposal.titleId).toBeNull();
     expect(proposal.confidence).toBeLessThan(0.45);
+    expect(proposal.queueReason).toBe('llm_unavailable');
     expect(proposal.proposalReason).toContain('LLM extraction unavailable');
   });
 
   it('queues when the LLM ran but no title match was found, regardless of episode confidence', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
 
     const { proposal, tier } = proposeRule(
@@ -92,13 +104,22 @@ describe('proposeRule', () => {
 
     expect(tier).toBe('queue');
     expect(proposal.titleId).toBeNull();
+    expect(proposal.queueReason).toBe('no_title_match');
     expect(proposal.proposalReason).toContain('no confident title match');
   });
 
   it('queues when the LLM reports itself not confident', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
-    const llm = await stavkaLlmExtraction({ confident: false, reasoning: 'Not sure about episode 7.' });
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
+    const llm = await stavkaLlmExtraction({
+      confident: false,
+      reasoning: 'Not sure about episode 7.',
+    });
 
     const { proposal, tier } = proposeRule(
       { hash: fixture.hash, rawNameAtIngest: fixture.torrentName },
@@ -108,12 +129,18 @@ describe('proposeRule', () => {
     );
 
     expect(tier).toBe('queue');
+    expect(proposal.queueReason).toBe('llm_not_confident');
     expect(proposal.proposalReason).toContain('Not sure about episode 7');
   });
 
   it('queues when the LLM omits a video file from its response', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
     llm.files = llm.files.slice(0, -1); // drop the last file's assignment
 
@@ -125,12 +152,18 @@ describe('proposeRule', () => {
     );
 
     expect(tier).toBe('queue');
+    expect(proposal.queueReason).toBe('incomplete_coverage');
     expect(proposal.proposalReason).toContain('did not cover every video file');
   });
 
   it('queues when an LLM-assigned episode falls outside the known provider season list', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
     llm.files[0] = { fileId: at(files, 0).id, episode: 99 };
 
@@ -142,12 +175,20 @@ describe('proposeRule', () => {
     );
 
     expect(tier).toBe('queue');
+    // The assertion the retry step actually depends on: prose is free to be
+    // reworded, this is what listQueuedProviderMismatchRules selects on.
+    expect(proposal.queueReason).toBe('provider_mismatch');
     expect(proposal.proposalReason).toContain('outside the known season');
   });
 
   it('marks a file as ignored (trailer/sample) when the LLM assigns it a null episode', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
     llm.files[0] = { fileId: at(files, 0).id, episode: null };
 
@@ -163,7 +204,12 @@ describe('proposeRule', () => {
 
   it('trusts the LLM season/episode numbers when no provider data is cached (no false negative)', async () => {
     const fixture = await stavkaNaLyubov();
-    const files = fixture.files.map((f) => ({ id: f.id, rawPath: f.rawPath, isVideo: f.isVideo, size: f.size }));
+    const files = fixture.files.map((f) => ({
+      id: f.id,
+      rawPath: f.rawPath,
+      isVideo: f.isVideo,
+      size: f.size,
+    }));
     const llm = await stavkaLlmExtraction();
     const titleMatchNoProviderData: TitleMatch = {
       titleId: 'stavka-title',

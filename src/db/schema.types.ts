@@ -56,6 +56,16 @@ export const ruleRowSchema = z.object({
   confidence: z.number(),
   source: ruleSourceSchema,
   proposal_reason: z.string().nullable().optional(),
+  queue_reason: z
+    .enum([
+      'llm_unavailable',
+      'no_title_match',
+      'incomplete_coverage',
+      'provider_mismatch',
+      'llm_not_confident',
+    ])
+    .nullable()
+    .optional(),
   torrent_name: z.string().nullable().optional(),
   created_at: z.date(),
 });
