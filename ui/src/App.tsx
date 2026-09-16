@@ -32,6 +32,7 @@ import {
 import { AuthProvider, LoginPage } from './auth.js';
 import { useAuth } from './useAuth.js';
 import { apiFetch } from './api.js';
+import { useTapTooltips } from './useTapTooltips.js';
 
 // Import the pure expandRule function and types from our backend src. Only
 // resolve/{expandRule,types}.ts qualify for this -- they're genuinely
@@ -481,7 +482,10 @@ function EmptyState({
 }) {
   return (
     <div className="state-message">
-      <div className="state-message-icon" style={{ backgroundColor: `color-mix(in srgb, ${iconColor} 12%, transparent)` }}>
+      <div
+        className="state-message-icon"
+        style={{ backgroundColor: `color-mix(in srgb, ${iconColor} 12%, transparent)` }}
+      >
         <Icon size={28} color={iconColor} />
       </div>
       <h3>{title}</h3>
@@ -516,6 +520,7 @@ function AdminApp() {
   const queryClient = useQueryClient();
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<TabId>(getInitialTab);
+  useTapTooltips();
 
   // Keeps the URL's ?tab= param in sync with the active tab (replaceState,
   // not pushState, so tab switches don't spam browser history).
@@ -722,7 +727,8 @@ function AdminApp() {
   });
 
   const deleteTorrent = useMutation({
-    mutationFn: (hash: string) => apiFetch<{ success: boolean }>(`/api/torrents/${hash}`, { method: 'DELETE' }),
+    mutationFn: (hash: string) =>
+      apiFetch<{ success: boolean }>(`/api/torrents/${hash}`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['health'] });
       showToast('Torrent deleted.');
@@ -739,7 +745,9 @@ function AdminApp() {
       }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['health'] });
-      showToast(`Deleted ${result.deletedCount} gone torrent${result.deletedCount === 1 ? '' : 's'}.`);
+      showToast(
+        `Deleted ${result.deletedCount} gone torrent${result.deletedCount === 1 ? '' : 's'}.`,
+      );
     },
     onError: (err) => {
       showToast(`Purge failed: ${err.message}`, 'error');
@@ -765,7 +773,8 @@ function AdminApp() {
   });
 
   const deleteNonRussianTitle = useMutation({
-    mutationFn: (id: string) => apiFetch<{ success: boolean }>(`/api/titles/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) =>
+      apiFetch<{ success: boolean }>(`/api/titles/${id}`, { method: 'DELETE' }),
     onSuccess: (_result, id) => {
       queryClient.setQueryData<NonRussianAuditResult | undefined>(['nonRussianAudit'], (prev) =>
         prev ? { ...prev, flagged: prev.flagged.filter((f) => f.id !== id) } : prev,
@@ -1343,7 +1352,9 @@ function QueueView({
                     <td className="col-center" data-label="Files">
                       {item.fileCount}
                     </td>
-                    <td data-label="Proposed Show Mapping">{item.proposal?.proposedTitle || '-'}</td>
+                    <td data-label="Proposed Show Mapping">
+                      {item.proposal?.proposedTitle || '-'}
+                    </td>
                     <td className="col-center" data-label="Season">
                       {item.proposal?.proposedSeason ?? '-'}
                     </td>
@@ -1634,7 +1645,9 @@ function LabellerView({
             disabled={previewWithAi.isPending || !hash}
             title="Runs the LLM extraction for this torrent and fills in the fields below for review -- nothing is saved until you click Save."
           >
-            {previewWithAi.isPending ? 'Asking the LLM… (can take up to a minute)' : 'Preview with AI'}
+            {previewWithAi.isPending
+              ? 'Asking the LLM… (can take up to a minute)'
+              : 'Preview with AI'}
           </button>
           <button className="btn btn-primary" onClick={handleSubmit} disabled={saveRule.isPending}>
             {saveRule.isPending
@@ -1652,9 +1665,15 @@ function LabellerView({
             populated above is still freely editable before Save. */}
         {lastPreview && (
           <div className={`banner ${lastPreview.tier === 'commit' ? 'success' : 'attention'}`}>
-            {lastPreview.tier === 'commit' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+            {lastPreview.tier === 'commit' ? (
+              <CheckCircle size={16} />
+            ) : (
+              <AlertTriangle size={16} />
+            )}
             <span>
-              <strong>AI preview ({lastPreview.tier === 'commit' ? 'confident' : 'needs review'}):</strong>{' '}
+              <strong>
+                AI preview ({lastPreview.tier === 'commit' ? 'confident' : 'needs review'}):
+              </strong>{' '}
               {lastPreview.reasoning}
             </span>
           </div>
@@ -2195,7 +2214,12 @@ function TitleFormModal({ mode, initial, isSubmitting, onClose, onSubmit }: Titl
                       <img
                         src={show.posterUrl}
                         alt=""
-                        style={{ width: '30px', height: '45px', objectFit: 'cover', borderRadius: '4px' }}
+                        style={{
+                          width: '30px',
+                          height: '45px',
+                          objectFit: 'cover',
+                          borderRadius: '4px',
+                        }}
                       />
                     ) : (
                       <div
@@ -2231,11 +2255,7 @@ function TitleFormModal({ mode, initial, isSubmitting, onClose, onSubmit }: Titl
             </div>
             <div className="form-group">
               <label>Year</label>
-              <input
-                type="number"
-                value={year}
-                onChange={(e) => setYear(e.target.value)}
-              />
+              <input type="number" value={year} onChange={(e) => setYear(e.target.value)} />
             </div>
           </div>
 
@@ -2316,7 +2336,13 @@ interface LibraryViewProps {
   onAddTitle: () => void;
   onEditTitle: (title: TitleRecord) => void;
 }
-function LibraryView({ library, isLoading, onEditRule, onAddTitle, onEditTitle }: LibraryViewProps) {
+function LibraryView({
+  library,
+  isLoading,
+  onEditRule,
+  onAddTitle,
+  onEditTitle,
+}: LibraryViewProps) {
   const [filter, setFilter] = useState('');
 
   if (isLoading) return <LoadingState label="Loading library grid..." />;
@@ -2367,156 +2393,164 @@ function LibraryView({ library, isLoading, onEditRule, onAddTitle, onEditTitle }
         ) : filteredLibrary.length === 0 ? (
           <p className="panel-empty">No shows match "{filter}".</p>
         ) : (
-        <div className="library-grid">
-          {filteredLibrary.map((show) => (
-            <div key={show.id} className="library-card">
-              <div className="library-card-header">
-                {show.posterUrl ? (
-                  <img src={show.posterUrl} alt="" className="library-card-poster" />
-                ) : (
-                  <div
-                    className="library-card-poster"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: 'var(--bg-surface-elevated)',
-                    }}
-                  >
-                    <FolderOpen size={24} color="var(--text-dim)" />
-                  </div>
-                )}
-                <div className="library-card-title-info" style={{ flex: 1, minWidth: 0 }}>
-                  <h3>{show.nameRu}</h3>
-                  <span style={{ display: 'block' }}>{show.nameEn}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{show.year ?? 'N/A'}</span>
-                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
-                    {show.imdbId ? (
-                      <span className="badge neutral" style={{ fontSize: '10px' }}>
-                        imdb:{show.imdbId}
-                      </span>
-                    ) : null}
-                    {show.tmdbId ? (
-                      <span className="badge neutral" style={{ fontSize: '10px' }}>
-                        tmdb:{show.tmdbId}
-                      </span>
-                    ) : null}
-                    {show.tvdbId ? (
-                      <span className="badge neutral" style={{ fontSize: '10px' }}>
-                        tvdb:{show.tvdbId}
-                      </span>
-                    ) : null}
-                    {!show.imdbId && !show.tmdbId && !show.tvdbId ? (
-                      <span className="badge attention" style={{ fontSize: '10px' }}>
-                        No Provider ID
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <button
-                  className="icon-btn icon-btn-neutral"
-                  style={{ alignSelf: 'flex-start' }}
-                  title="Edit name/year/poster and provider ids"
-                  onClick={() =>
-                    onEditTitle({
-                      id: show.id,
-                      nameRu: show.nameRu,
-                      nameEn: show.nameEn,
-                      year: show.year,
-                      posterUrl: show.posterUrl,
-                      imdbId: show.imdbId,
-                      tmdbId: show.tmdbId,
-                      tvdbId: show.tvdbId,
-                    })
-                  }
-                >
-                  <Pencil size={14} />
-                </button>
-              </div>
-
-              <div className="library-card-seasons">
-                {show.seasons.map((season) => {
-                  const totalCount = season.totalEpisodesCount ?? 0;
-
-                  // Build a sparse array representing episode boxes
-                  const maxEp = Math.max(
-                    totalCount,
-                    season.episodes.reduce((max: number, curr) => Math.max(max, curr.episode), 0),
-                  );
-
-                  const boxes = [];
-                  for (let ep = 1; ep <= maxEp; ep++) {
-                    const match = season.episodes.find((e) => e.episode === ep);
-                    const state = !match ? 'empty' : match.count > 1 ? 'duplicate' : 'mapped';
-                    const tooltipText = !match
-                      ? `Episode ${ep} (Missing)`
-                      : match.count > 1
-                        ? `Episode ${ep} (${match.count} files matched: ${match.files.join(', ')})`
-                        : `Episode ${ep} (Matched: ${match.files[0]})`;
-
-                    boxes.push(
-                      <div key={ep} className={`episode-box ${state}`} data-tooltip={tooltipText}>
-                        {ep}
-                      </div>,
-                    );
-                  }
-
-                  return (
+          <div className="library-grid">
+            {filteredLibrary.map((show) => (
+              <div key={show.id} className="library-card">
+                <div className="library-card-header">
+                  {show.posterUrl ? (
+                    <img src={show.posterUrl} alt="" className="library-card-poster" />
+                  ) : (
                     <div
-                      key={season.seasonNumber}
+                      className="library-card-poster"
                       style={{
-                        borderBottom: '1px solid rgba(255,255,255,0.03)',
-                        paddingBottom: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'var(--bg-surface-elevated)',
                       }}
                     >
-                      <div className="season-row">
-                        <strong>Season {season.seasonNumber}</strong>
-                        <span style={{ color: 'var(--text-muted)' }}>
-                          {season.mappedEpisodesCount} / {season.totalEpisodesCount ?? '?'} ep
-                        </span>
-                      </div>
-                      <div className="episode-grid">{boxes}</div>
-                      {season.rules.length > 0 && (
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '4px',
-                            marginTop: '8px',
-                          }}
-                        >
-                          {season.rules.map((rule) => (
-                            <div
-                              key={rule.id}
-                              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-                            >
-                              <span
-                                className="mono"
-                                style={{ fontSize: '11px', color: 'var(--text-dim)' }}
-                              >
-                                {rule.torrentHash.substring(0, 8)}
-                              </span>
-                              <span className="badge neutral" style={{ fontSize: '10px' }}>
-                                {rule.numbering}
-                              </span>
-                              <button
-                                className="btn btn-secondary"
-                                style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: '11px' }}
-                                onClick={() => onEditRule(rule.torrentHash, rule.id)}
-                              >
-                                Edit
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <FolderOpen size={24} color="var(--text-dim)" />
                     </div>
-                  );
-                })}
+                  )}
+                  <div className="library-card-title-info" style={{ flex: 1, minWidth: 0 }}>
+                    <h3>{show.nameRu}</h3>
+                    <span style={{ display: 'block' }}>{show.nameEn}</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                      {show.year ?? 'N/A'}
+                    </span>
+                    <div
+                      style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}
+                    >
+                      {show.imdbId ? (
+                        <span className="badge neutral" style={{ fontSize: '10px' }}>
+                          imdb:{show.imdbId}
+                        </span>
+                      ) : null}
+                      {show.tmdbId ? (
+                        <span className="badge neutral" style={{ fontSize: '10px' }}>
+                          tmdb:{show.tmdbId}
+                        </span>
+                      ) : null}
+                      {show.tvdbId ? (
+                        <span className="badge neutral" style={{ fontSize: '10px' }}>
+                          tvdb:{show.tvdbId}
+                        </span>
+                      ) : null}
+                      {!show.imdbId && !show.tmdbId && !show.tvdbId ? (
+                        <span className="badge attention" style={{ fontSize: '10px' }}>
+                          No Provider ID
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    className="icon-btn icon-btn-neutral"
+                    style={{ alignSelf: 'flex-start' }}
+                    title="Edit name/year/poster and provider ids"
+                    onClick={() =>
+                      onEditTitle({
+                        id: show.id,
+                        nameRu: show.nameRu,
+                        nameEn: show.nameEn,
+                        year: show.year,
+                        posterUrl: show.posterUrl,
+                        imdbId: show.imdbId,
+                        tmdbId: show.tmdbId,
+                        tvdbId: show.tvdbId,
+                      })
+                    }
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </div>
+
+                <div className="library-card-seasons">
+                  {show.seasons.map((season) => {
+                    const totalCount = season.totalEpisodesCount ?? 0;
+
+                    // Build a sparse array representing episode boxes
+                    const maxEp = Math.max(
+                      totalCount,
+                      season.episodes.reduce((max: number, curr) => Math.max(max, curr.episode), 0),
+                    );
+
+                    const boxes = [];
+                    for (let ep = 1; ep <= maxEp; ep++) {
+                      const match = season.episodes.find((e) => e.episode === ep);
+                      const state = !match ? 'empty' : match.count > 1 ? 'duplicate' : 'mapped';
+                      const tooltipText = !match
+                        ? `Episode ${ep} (Missing)`
+                        : match.count > 1
+                          ? `Episode ${ep} (${match.count} files matched: ${match.files.join(', ')})`
+                          : `Episode ${ep} (Matched: ${match.files[0]})`;
+
+                      boxes.push(
+                        <div key={ep} className={`episode-box ${state}`} data-tooltip={tooltipText}>
+                          {ep}
+                        </div>,
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={season.seasonNumber}
+                        style={{
+                          borderBottom: '1px solid rgba(255,255,255,0.03)',
+                          paddingBottom: '8px',
+                        }}
+                      >
+                        <div className="season-row">
+                          <strong>Season {season.seasonNumber}</strong>
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {season.mappedEpisodesCount} / {season.totalEpisodesCount ?? '?'} ep
+                          </span>
+                        </div>
+                        <div className="episode-grid">{boxes}</div>
+                        {season.rules.length > 0 && (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '4px',
+                              marginTop: '8px',
+                            }}
+                          >
+                            {season.rules.map((rule) => (
+                              <div
+                                key={rule.id}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                              >
+                                <span
+                                  className="mono"
+                                  style={{ fontSize: '11px', color: 'var(--text-dim)' }}
+                                >
+                                  {rule.torrentHash.substring(0, 8)}
+                                </span>
+                                <span className="badge neutral" style={{ fontSize: '10px' }}>
+                                  {rule.numbering}
+                                </span>
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{
+                                    marginLeft: 'auto',
+                                    padding: '2px 8px',
+                                    fontSize: '11px',
+                                  }}
+                                  onClick={() => onEditRule(rule.torrentHash, rule.id)}
+                                >
+                                  Edit
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
         )}
       </div>
     </>
@@ -2646,7 +2680,9 @@ function HealthView({
                   }
                 }}
               >
-                {purgeGoneTorrents.isPending ? 'Deleting...' : `Delete All Gone (${health.goneCount})`}
+                {purgeGoneTorrents.isPending
+                  ? 'Deleting...'
+                  : `Delete All Gone (${health.goneCount})`}
               </button>
             </div>
             {health.goneTorrents.length === 0 ? (
@@ -2749,8 +2785,8 @@ function HealthView({
             <p className="panel-empty">Loading...</p>
           ) : activity.length === 0 ? (
             <p className="panel-empty">
-              Nothing logged yet -- this fills in as torrents get auto-mapped and RuTracker
-              entries get matched.
+              Nothing logged yet -- this fills in as torrents get auto-mapped and RuTracker entries
+              get matched.
             </p>
           ) : (
             <div
@@ -2807,8 +2843,7 @@ function HealthView({
             </p>
           ) : nonRussianAudit.flagged.length === 0 ? (
             <p className="panel-empty">
-              Checked {nonRussianAudit.checked} of {nonRussianAudit.total} title(s) -- none
-              flagged.
+              Checked {nonRussianAudit.checked} of {nonRussianAudit.total} title(s) -- none flagged.
             </p>
           ) : (
             <>
@@ -2944,15 +2979,29 @@ function FeedView({
                   <tr key={item.topicId}>
                     <td data-label="Show" style={{ minWidth: '220px' }}>
                       {item.titleName ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            flexWrap: 'wrap',
+                          }}
+                        >
                           <span style={{ fontWeight: 'bold' }}>{item.titleName}</span>
                           {item.season !== null && item.episode !== null && (
-                            <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                              S{String(item.season).padStart(2, '0')}E{String(item.episode).padStart(2, '0')}
+                            <span
+                              className="mono"
+                              style={{ fontSize: '11px', color: 'var(--text-muted)' }}
+                            >
+                              S{String(item.season).padStart(2, '0')}E
+                              {String(item.episode).padStart(2, '0')}
                             </span>
                           )}
                           {item.alreadyInLibrary && (
-                            <span className="badge success" title="This episode is already mapped in your Library">
+                            <span
+                              className="badge success"
+                              title="This episode is already mapped in your Library"
+                            >
                               <CheckCircle size={12} /> In Library
                             </span>
                           )}
@@ -2960,14 +3009,17 @@ function FeedView({
                       ) : (
                         <FeedMatchPicker
                           library={library}
-                          onSelect={(titleId) => matchFeedEntry.mutate({ topicId: item.topicId, titleId })}
+                          onSelect={(titleId) =>
+                            matchFeedEntry.mutate({ topicId: item.topicId, titleId })
+                          }
                           disabled={matchFeedEntry.isPending}
                         />
                       )}
                     </td>
                     <td className="mono" data-label="Raw Title" style={{ fontSize: '12px' }}>
                       <a href={item.url} target="_blank" rel="noreferrer">
-                        {item.rawTitle} <ExternalLink size={11} style={{ verticalAlign: 'middle' }} />
+                        {item.rawTitle}{' '}
+                        <ExternalLink size={11} style={{ verticalAlign: 'middle' }} />
                       </a>
                     </td>
                     <td
@@ -2984,7 +3036,9 @@ function FeedView({
                       ) : (
                         <button
                           className="btn btn-primary"
-                          disabled={downloadFeedEntry.isPending && downloadingTopicId === item.topicId}
+                          disabled={
+                            downloadFeedEntry.isPending && downloadingTopicId === item.topicId
+                          }
                           onClick={() => {
                             setDownloadingTopicId(item.topicId);
                             downloadFeedEntry.mutate(item.topicId);
