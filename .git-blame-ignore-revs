@@ -1,0 +1,9 @@
+# Commits that changed formatting only, and would otherwise bury the real
+# author of every line they touched.
+#
+# Git uses this automatically once configured locally:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view honours this file with no configuration at all.
+
+# Format the repo with Prettier (whitespace only, no behaviour change)
+21f3bffd7add777952bed84ec652d20ade61af33

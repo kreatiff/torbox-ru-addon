@@ -82,6 +82,11 @@ jobs:
 
       - run: npm run lint
 
+      # Covers the ui/ workspace too -- Prettier runs from the repo root over
+      # everything .prettierignore doesn't exclude, so there's one style gate,
+      # not one per package.
+      - run: npm run format:check
+
       - run: npm test
 
   ui:
