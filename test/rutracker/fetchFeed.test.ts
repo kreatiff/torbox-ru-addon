@@ -13,7 +13,10 @@ afterEach(() => {
 
 describe('fetchFeed', () => {
   it('parses the real feed fixture end to end and returns all 50 entries', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(xml, { status: 200 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(xml, { status: 200 })),
+    );
     const entries = await fetchFeed();
     expect(entries).toHaveLength(50);
   });
@@ -29,7 +32,10 @@ describe('fetchFeed', () => {
   });
 
   it('never throws on a non-OK HTTP status -- returns an empty array', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 503 })),
+    );
     await expect(fetchFeed()).resolves.toEqual([]);
   });
 

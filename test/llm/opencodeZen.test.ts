@@ -43,17 +43,16 @@ describe('OpenCode Zen client', () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(JSON.stringify(extraction)));
     global.fetch = fetchSpy;
 
-    const result = await extractEpisodes('rutor.info_Большой куш. Бангкок [S01] (2025) WEBRip 1080p от Files-x', [
-      { fileId: 1, path: '01. Большой куш.mkv', size: 6_000_000_000 },
-    ]);
+    const result = await extractEpisodes(
+      'rutor.info_Большой куш. Бангкок [S01] (2025) WEBRip 1080p от Files-x',
+      [{ fileId: 1, path: '01. Большой куш.mkv', size: 6_000_000_000 }],
+    );
 
     expect(result).toEqual(extraction);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://opencode.ai/zen/v1/chat/completions');
-    expect(init.headers).toEqual(
-      expect.objectContaining({ Authorization: 'Bearer mock-zen-key' }),
-    );
+    expect(init.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer mock-zen-key' }));
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe(config.opencodeZenModel);
     expect(body.messages[1].content).toContain('rutor.info_Большой куш');
@@ -119,6 +118,8 @@ describe('OpenCode Zen client', () => {
       text: async () => 'rate limited',
     } as Response);
 
-    await expect(extractEpisodes('Show', [{ fileId: 1, path: 'a.mkv' }])).rejects.toThrow('HTTP 429');
+    await expect(extractEpisodes('Show', [{ fileId: 1, path: 'a.mkv' }])).rejects.toThrow(
+      'HTTP 429',
+    );
   });
 });

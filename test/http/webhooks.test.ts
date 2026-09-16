@@ -11,7 +11,9 @@ vi.mock('../../src/ingest/pipeline.js', async (importOriginal) => {
 
 describe('POST /webhooks/torbox/:token', () => {
   beforeEach(() => {
-    vi.mocked(runIngestDeduped).mockReset().mockResolvedValue({} as never);
+    vi.mocked(runIngestDeduped)
+      .mockReset()
+      .mockResolvedValue({} as never);
   });
 
   afterEach(() => {

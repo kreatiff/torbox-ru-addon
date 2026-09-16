@@ -128,7 +128,9 @@ async function chatComplete(messages: { role: string; content: string }[]): Prom
 
 function buildUserPrompt(torrentName: string, files: LlmExtractionFileInput[]): string {
   const fileLines = files
-    .map((f) => `- fileId ${f.fileId}: ${f.path}${f.size !== undefined ? ` (${f.size} bytes)` : ''}`)
+    .map(
+      (f) => `- fileId ${f.fileId}: ${f.path}${f.size !== undefined ? ` (${f.size} bytes)` : ''}`,
+    )
     .join('\n');
   return `Torrent name: ${torrentName}\n\nVideo files:\n${fileLines}`;
 }
@@ -160,13 +162,20 @@ export async function extractEpisodes(
       return extractionSchema.parse(json);
     } catch (err) {
       if (attempt === 1) {
-        logger.error({ err, content }, 'OpenCode Zen did not return valid extraction JSON after retry');
+        logger.error(
+          { err, content },
+          'OpenCode Zen did not return valid extraction JSON after retry',
+        );
         throw new Error('OpenCode Zen did not return valid extraction JSON', { cause: err });
       }
       logger.warn({ content }, 'OpenCode Zen response was not valid JSON, retrying once');
       messages.push(
         { role: 'assistant', content },
-        { role: 'user', content: 'That was not a valid JSON object matching the required shape. Reply with ONLY the JSON object.' },
+        {
+          role: 'user',
+          content:
+            'That was not a valid JSON object matching the required shape. Reply with ONLY the JSON object.',
+        },
       );
       content = await chatComplete(messages);
     }

@@ -11,7 +11,9 @@ import {
 } from '../../../src/db/repositories/feedEntriesRepo.js';
 
 async function insertTitle(nameRu: string): Promise<string> {
-  const result = await pool.query('insert into titles (name_ru) values ($1) returning id', [nameRu]);
+  const result = await pool.query('insert into titles (name_ru) values ($1) returning id', [
+    nameRu,
+  ]);
   return result.rows[0].id;
 }
 

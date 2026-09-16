@@ -50,7 +50,9 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
   });
 
   it('pre-maps the episode at download time, so a later ingest materialises the mapping with zero LLM calls', async () => {
-    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const title = await pool.query(
+      `insert into titles (name_ru) values ('Большой куш') returning id`,
+    );
     const titleId = title.rows[0].id as string;
     await pool.query(
       `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
@@ -58,7 +60,11 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
       [titleId],
     );
 
-    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:ABCDEF1234567890ABCDEF1234567890ABCDEF12', 555, 'ABCDEF1234567890ABCDEF1234567890ABCDEF12');
+    stubFlareSolverrAndTorBox(
+      'magnet:?xt=urn:btih:ABCDEF1234567890ABCDEF1234567890ABCDEF12',
+      555,
+      'ABCDEF1234567890ABCDEF1234567890ABCDEF12',
+    );
 
     const result = await downloadFeedEntry(1);
     expect(result).toEqual({ ok: true, alreadyDownloaded: false, rawTitle: expect.any(String) });
@@ -110,7 +116,9 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
   });
 
   it('a real ingest run after pre-mapping still fetches the torrent files (regression: pre-mapped torrents were never fetched)', async () => {
-    const title = await pool.query(`insert into titles (name_ru) values ('Большой куш') returning id`);
+    const title = await pool.query(
+      `insert into titles (name_ru) values ('Большой куш') returning id`,
+    );
     const titleId = title.rows[0].id as string;
     await pool.query(
       `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
@@ -136,10 +144,9 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
           );
         }
         if (url.includes('createtorrent')) {
-          return new Response(
-            JSON.stringify({ success: true, data: { torrent_id: 777, hash } }),
-            { status: 200 },
-          );
+          return new Response(JSON.stringify({ success: true, data: { torrent_id: 777, hash } }), {
+            status: 200,
+          });
         }
         if (url.includes('/refresh/')) {
           return new Response(null, { status: 200 });
@@ -206,7 +213,11 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
        (2, $1, 'Show [2026, BDRip]', 'https://rutracker.org/forum/viewtopic.php?t=2', now())`,
       [title.rows[0].id],
     );
-    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:1111111111111111111111111111111111111111', 556, '1111111111111111111111111111111111111111');
+    stubFlareSolverrAndTorBox(
+      'magnet:?xt=urn:btih:1111111111111111111111111111111111111111',
+      556,
+      '1111111111111111111111111111111111111111',
+    );
 
     const result = await downloadFeedEntry(2);
     expect(result.ok).toBe(true);
@@ -220,7 +231,11 @@ describe.skipIf(!hasTestDb)('downloadFeedEntry pre-mapping', () => {
       `insert into feed_entries (topic_id, title_id, raw_title, url, last_updated) values
        (3, null, 'Something 2 сезон: 5 выпуск', 'https://rutracker.org/forum/viewtopic.php?t=3', now())`,
     );
-    stubFlareSolverrAndTorBox('magnet:?xt=urn:btih:2222222222222222222222222222222222222222', 557, '2222222222222222222222222222222222222222');
+    stubFlareSolverrAndTorBox(
+      'magnet:?xt=urn:btih:2222222222222222222222222222222222222222',
+      557,
+      '2222222222222222222222222222222222222222',
+    );
 
     const result = await downloadFeedEntry(3);
     expect(result.ok).toBe(true);

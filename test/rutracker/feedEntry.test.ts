@@ -28,7 +28,9 @@ describe('parseFeedEntry against the real live feed fixture (f/939)', () => {
   });
 
   it('parses every entry in the fixture through feedEntrySchema', () => {
-    const results = rawEntries.map((raw) => parseFeedEntry(raw as Parameters<typeof parseFeedEntry>[0]));
+    const results = rawEntries.map((raw) =>
+      parseFeedEntry(raw as Parameters<typeof parseFeedEntry>[0]),
+    );
     expect(results.every((r) => r !== null)).toBe(true);
     expect(results).toHaveLength(50);
   });

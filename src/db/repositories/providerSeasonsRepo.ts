@@ -27,13 +27,7 @@ export async function upsertProviderSeason(
        episodes = excluded.episodes,
        fetched_at = now()
      returning *`,
-    [
-      data.title_id,
-      data.season,
-      data.source,
-      data.episode_count,
-      JSON.stringify(data.episodes),
-    ],
+    [data.title_id, data.season, data.source, data.episode_count, JSON.stringify(data.episodes)],
   );
   const row = result.rows[0];
   if (!row) {

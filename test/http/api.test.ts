@@ -31,10 +31,14 @@ vi.mock('../../src/ingest/pipeline.js', async (importOriginal) => {
 });
 
 function makeSessionCookie(app: FastifyInstance, email = 'admin@example.com') {
-  const session = (app as FastifyInstance & { createSecureSession: (data: object) => object }).createSecureSession({
+  const session = (
+    app as FastifyInstance & { createSecureSession: (data: object) => object }
+  ).createSecureSession({
     user: { email, name: 'Admin', picture: null },
   });
-  const encoded = (app as FastifyInstance & { encodeSecureSession: (session: object) => string }).encodeSecureSession(session);
+  const encoded = (
+    app as FastifyInstance & { encodeSecureSession: (session: object) => string }
+  ).encodeSecureSession(session);
   // @fastify/cookie serializes the value with URL-encoding for characters
   // such as ';' and '/'. Browsers send the cookie back with that encoding,
   // so tests must match.

@@ -82,7 +82,9 @@ export async function getPlaybackUrl(torrentId: number, fileId: number): Promise
  * Multipart/form-data, not JSON, per TorBox's documented shape for this
  * endpoint.
  */
-export async function addTorrentMagnet(magnet: string): Promise<{ torrentId: number | null; hash: string | null }> {
+export async function addTorrentMagnet(
+  magnet: string,
+): Promise<{ torrentId: number | null; hash: string | null }> {
   const url = `${API_BASE_URL}/torrents/createtorrent`;
   const form = new FormData();
   form.append('magnet', magnet);
@@ -98,7 +100,10 @@ export async function addTorrentMagnet(magnet: string): Promise<{ torrentId: num
   try {
     body = await response.json();
   } catch {
-    logger.error({ url, status: response.status }, 'TorBox createtorrent response body was not valid JSON');
+    logger.error(
+      { url, status: response.status },
+      'TorBox createtorrent response body was not valid JSON',
+    );
     throw new TorboxApiError(`TorBox returned a non-JSON response (HTTP ${response.status})`, url);
   }
 

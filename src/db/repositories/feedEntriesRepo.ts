@@ -120,7 +120,10 @@ export async function getFeedEntryByTopicId(topicId: number): Promise<FeedEntryR
  * doesn't reference a real title (FK violation) rather than throwing, so
  * the route can turn either into a clean 404/400.
  */
-export async function setTitleId(topicId: number, titleId: string): Promise<FeedEntryRecord | null> {
+export async function setTitleId(
+  topicId: number,
+  titleId: string,
+): Promise<FeedEntryRecord | null> {
   try {
     const result = await pool.query(
       'update feed_entries set title_id = $1 where topic_id = $2 returning *',
@@ -159,7 +162,10 @@ const MAX_FEED_ENTRIES_LIMIT = 200;
 export async function listFeedEntries(
   options: ListFeedEntriesOptions = {},
 ): Promise<FeedEntryWithTitleName[]> {
-  const limit = Math.min(Math.max(options.limit ?? DEFAULT_FEED_ENTRIES_LIMIT, 1), MAX_FEED_ENTRIES_LIMIT);
+  const limit = Math.min(
+    Math.max(options.limit ?? DEFAULT_FEED_ENTRIES_LIMIT, 1),
+    MAX_FEED_ENTRIES_LIMIT,
+  );
   const offset = Math.max(options.offset ?? 0, 0);
 
   const result = await pool.query(

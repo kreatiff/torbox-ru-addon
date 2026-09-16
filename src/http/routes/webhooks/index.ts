@@ -39,27 +39,23 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  app.post(
-    '/torbox/:token',
-    { onRequest: verifyWebhookToken },
-    async (request, reply) => {
-      let parsedBody: unknown = request.body;
-      if (typeof request.body === 'string' && request.body.length > 0) {
-        try {
-          parsedBody = JSON.parse(request.body);
-        } catch {
-          // Not JSON -- fine, nothing here depends on the payload shape.
-        }
+  app.post('/torbox/:token', { onRequest: verifyWebhookToken }, async (request, reply) => {
+    let parsedBody: unknown = request.body;
+    if (typeof request.body === 'string' && request.body.length > 0) {
+      try {
+        parsedBody = JSON.parse(request.body);
+      } catch {
+        // Not JSON -- fine, nothing here depends on the payload shape.
       }
-      logger.info({ body: parsedBody }, 'torbox webhook received; triggering ingest');
+    }
+    logger.info({ body: parsedBody }, 'torbox webhook received; triggering ingest');
 
-      // Ack immediately, run in the background -- same reasoning as
-      // POST /api/ingest/run (src/http/routes/api/index.ts): TorBox
-      // shouldn't have to wait out a full ingest run just to get a 200.
-      reply.code(200).send({ ok: true });
-      runIngestDeduped().catch((err) => {
-        logger.error({ err }, 'ingest run triggered by torbox webhook failed');
-      });
-    },
-  );
+    // Ack immediately, run in the background -- same reasoning as
+    // POST /api/ingest/run (src/http/routes/api/index.ts): TorBox
+    // shouldn't have to wait out a full ingest run just to get a 200.
+    reply.code(200).send({ ok: true });
+    runIngestDeduped().catch((err) => {
+      logger.error({ err }, 'ingest run triggered by torbox webhook failed');
+    });
+  });
 }

@@ -88,9 +88,11 @@ describe('fetchMagnetLink', () => {
       }),
     );
 
-    await expect(fetchMagnetLink('https://rutracker.org/forum/viewtopic.php?t=1')).resolves.toEqual({
-      ok: false,
-      error: 'Could not reach FlareSolverr',
-    });
+    await expect(fetchMagnetLink('https://rutracker.org/forum/viewtopic.php?t=1')).resolves.toEqual(
+      {
+        ok: false,
+        error: 'Could not reach FlareSolverr',
+      },
+    );
   });
 });

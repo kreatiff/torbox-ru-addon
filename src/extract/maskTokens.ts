@@ -1,6 +1,10 @@
 import type { AirDateResult, MaskResult } from './types.js';
 import { airDateRegex } from './airDate.js';
-import { buildQualityCodecRegex, buildReleaseGroupRegex, type MaskConfig } from './qualityCodecTokens.js';
+import {
+  buildQualityCodecRegex,
+  buildReleaseGroupRegex,
+  type MaskConfig,
+} from './qualityCodecTokens.js';
 
 /**
  * Spec §3.2 ordered masking pipeline. Runs BEFORE any number extraction.
@@ -38,17 +42,14 @@ export function maskTokens(input: string, config?: MaskConfig): MaskResult {
   masked = masked.replace(buildReleaseGroupRegex(config), '__RELEASE__');
 
   // 5. Season/episode markers: SxxExx with flexible separators.
-  masked = masked.replace(
-    /[sS](\d{1,2})[\s._-]*[eE](\d{1,3})/g,
-    (raw, seasonStr, episodeStr) => {
-      seasonEpisode = {
-        season: parseInt(seasonStr, 10),
-        episode: parseInt(episodeStr, 10),
-        raw,
-      };
-      return '__SEASON_EPISODE__';
-    },
-  );
+  masked = masked.replace(/[sS](\d{1,2})[\s._-]*[eE](\d{1,3})/g, (raw, seasonStr, episodeStr) => {
+    seasonEpisode = {
+      season: parseInt(seasonStr, 10),
+      episode: parseInt(episodeStr, 10),
+      raw,
+    };
+    return '__SEASON_EPISODE__';
+  });
 
   return { masked, airDate: airDates[0] ?? null, seasonEpisode };
 }

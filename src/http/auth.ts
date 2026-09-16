@@ -147,10 +147,7 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
   });
 }
 
-export async function verifySession(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): Promise<void> {
+export async function verifySession(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const user = request.session.get('user');
   if (!user) {
     await reply.code(401).send({ error: 'Unauthorized' });

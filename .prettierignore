@@ -3,3 +3,9 @@ node_modules
 src/ui/dist
 coverage
 package-lock.json
+
+# Prose, not code. Prettier collapses the hand-aligned columns in the wide
+# decision/spec tables (making them harder to read in source, not easier) and
+# these docs are cited by section from code comments -- churn here costs
+# readability and buys no consistency that matters.
+*.md

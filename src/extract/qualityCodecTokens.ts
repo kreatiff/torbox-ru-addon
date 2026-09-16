@@ -36,10 +36,7 @@ export const defaultQualityCodecTokens = [
   'avi',
 ];
 
-export const defaultReleaseGroups = [
-  'Files-x',
-  'Nicodem',
-];
+export const defaultReleaseGroups = ['Files-x', 'Nicodem'];
 
 export interface MaskConfig {
   qualityCodecTokens: string[];

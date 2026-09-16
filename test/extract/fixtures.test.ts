@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { cascade } from '../../src/extract/cascade.js';
-import {
-  sokrovishchaImperatora,
-  stavkaNaLyubov,
-  bolshoyKush,
-} from '../fixtures/index.js';
+import { sokrovishchaImperatora, stavkaNaLyubov, bolshoyKush } from '../fixtures/index.js';
 
 describe('extractor fixtures', () => {
   it('parses Сокровища императора 3 сезон 8 из 13', async () => {

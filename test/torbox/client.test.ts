@@ -32,10 +32,9 @@ describe('addTorrentMagnet', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response(
-            JSON.stringify({ success: false, error: 'DUPLICATE_TORRENT', data: null }),
-            { status: 200 },
-          ),
+          new Response(JSON.stringify({ success: false, error: 'DUPLICATE_TORRENT', data: null }), {
+            status: 200,
+          }),
       ),
     );
 

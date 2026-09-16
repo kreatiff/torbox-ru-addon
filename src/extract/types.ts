@@ -1,9 +1,5 @@
 export type EpisodeStage =
-  | 'seasonEpisode'
-  | 'episodeNumber'
-  | 'airDate'
-  | 'leadingNumber'
-  | 'positional';
+  'seasonEpisode' | 'episodeNumber' | 'airDate' | 'leadingNumber' | 'positional';
 
 export interface XofYResult {
   present: number;

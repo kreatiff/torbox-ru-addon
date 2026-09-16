@@ -21,8 +21,5 @@ export function normalise(input: string): string {
     result += cyrillicToLatin[folded] ?? folded;
   }
 
-  return result
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return result.replace(/\s+/g, ' ').trim().toLowerCase();
 }

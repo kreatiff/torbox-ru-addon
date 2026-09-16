@@ -98,7 +98,7 @@ describe('parseStreamId (pure, no DB needed)', () => {
     });
   });
 
-  it('parses a torboxru-shaped id -- issue #20\'s synthetic scheme for imdb_id-less titles', () => {
+  it("parses a torboxru-shaped id -- issue #20's synthetic scheme for imdb_id-less titles", () => {
     const uuid = '11111111-2222-3333-4444-555555555555';
     expect(parseStreamId(`torboxru:${uuid}:3:8`)).toEqual({
       scheme: 'internal',

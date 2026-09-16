@@ -36,7 +36,8 @@ function containsAtTokenBoundary(haystack: string, needle: string): boolean {
       return false;
     }
     const before = index === 0 ? undefined : haystack[index - 1];
-    const after = index + needle.length >= haystack.length ? undefined : haystack[index + needle.length];
+    const after =
+      index + needle.length >= haystack.length ? undefined : haystack[index + needle.length];
     if (!isWordChar(before) && !isWordChar(after)) {
       return true;
     }

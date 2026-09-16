@@ -10,7 +10,9 @@ vi.mock('../../src/ingest/pipeline.js', () => ({
 describe('startIngestScheduler', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.mocked(runIngestDeduped).mockReset().mockResolvedValue({} as never);
+    vi.mocked(runIngestDeduped)
+      .mockReset()
+      .mockResolvedValue({} as never);
   });
 
   afterEach(() => {

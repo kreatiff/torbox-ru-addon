@@ -42,10 +42,7 @@ export function parseXofY(input: string): XofYResult | null {
     };
   }
 
-  const singleRegex = new RegExp(
-    `(\\d{1,3})\\s*(?:${xOfYWordsPattern})\\s*(\\d{1,3})`,
-    'i',
-  );
+  const singleRegex = new RegExp(`(\\d{1,3})\\s*(?:${xOfYWordsPattern})\\s*(\\d{1,3})`, 'i');
   const singleMatch = input.match(singleRegex);
   if (singleMatch) {
     const presentStr = singleMatch[1];
