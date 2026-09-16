@@ -62,6 +62,7 @@ export interface IngestSummary {
   queuedProviderMismatchesChecked: number;
   queuedProviderMismatchesPromoted: number;
   rulesRebuilt: number;
+  rulesRewritten: number;
   rulesFailed: number;
 }
 
@@ -623,9 +624,14 @@ export async function runIngest(): Promise<IngestSummary> {
     await notifyDiscordEpisodesProcessed(processedForNotification);
   }
 
-  const { rulesProcessed: rulesRebuilt, rulesFailed } = await rebuildAllMappings();
+  const { rulesProcessed: rulesRebuilt, rulesRewritten, rulesFailed } = await rebuildAllMappings();
   if (rulesRebuilt > 0 || rulesFailed > 0) {
-    logger.info({ rulesRebuilt, rulesFailed }, 'mappings rebuilt for existing rules');
+    // rulesRewritten is the interesting number: rulesRebuilt counts every
+    // rule reconciled, which is the whole library every run by design.
+    logger.info(
+      { rulesRebuilt, rulesRewritten, rulesFailed },
+      'mappings reconciled for existing rules',
+    );
   }
 
   const summary: IngestSummary = {
@@ -644,6 +650,7 @@ export async function runIngest(): Promise<IngestSummary> {
     queuedProviderMismatchesChecked: queuedRetry.checked,
     queuedProviderMismatchesPromoted: queuedRetry.promoted,
     rulesRebuilt,
+    rulesRewritten,
     rulesFailed,
   };
   logger.info(summary, 'ingest run complete');
