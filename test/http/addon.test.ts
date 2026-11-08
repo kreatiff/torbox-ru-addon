@@ -49,7 +49,7 @@ describe('addon routes: manifest + token auth (no DB needed)', () => {
     const body = response.json();
     expect(body.types).toEqual(['series']);
     expect(body.resources).toEqual(['stream', 'catalog', 'meta']);
-    expect(body.idPrefixes).toEqual(['tt', 'tmdb:', 'torboxru:']);
+    expect(body.idPrefixes).toEqual(['tt', 'tmdb:', 'tvdb:', 'torboxru:']);
     expect(body.catalogs).toEqual([
       {
         type: 'series',
@@ -98,6 +98,13 @@ describe('parseStreamId (pure, no DB needed)', () => {
     });
   });
 
+  it.each([
+    ['tvdb:468075:3:1', 'plain'],
+    ['tvdb:468075:official:3:1', 'with official (aired) order, as AIOMetadata sends it'],
+  ])('parses a tvdb-shaped id: %s (%s)', (input) => {
+    expect(parseStreamId(input)).toEqual({ scheme: 'tvdb', id: 468075, season: 3, episode: 1 });
+  });
+
   it("parses a torboxru-shaped id -- issue #20's synthetic scheme for imdb_id-less titles", () => {
     const uuid = '11111111-2222-3333-4444-555555555555';
     expect(parseStreamId(`torboxru:${uuid}:3:8`)).toEqual({
@@ -117,6 +124,11 @@ describe('parseStreamId (pure, no DB needed)', () => {
     ['tmdb:x:3:8', 'non-numeric tmdb id'],
     ['tmdb:250793:x:8', 'non-numeric season (tmdb)'],
     [':3:8', 'empty imdb id'],
+    ['tvdb:468075:dvd:3:1', 'non-aired tvdb order -- numbering would not match ours'],
+    ['tvdb:468075:absolute:1:12', 'absolute tvdb order'],
+    ['tvdb:x:3:1', 'non-numeric tvdb id'],
+    ['tvdb:468075:official:x:1', 'non-numeric season (tvdb)'],
+    ['tvdb:468075:1', 'too few parts (tvdb)'],
     ['torboxru:not-a-uuid:3:8', 'malformed uuid'],
     ['torboxru:11111111-2222-3333-4444-555555555555:x:8', 'non-numeric season (torboxru)'],
   ])('returns null for %s (%s)', (input) => {
@@ -223,6 +235,41 @@ describe.skipIf(!hasTestDb)('addon routes: stream resolution (real Postgres)', (
     const response = await app.inject({
       method: 'GET',
       url: `/${config.addonToken}/stream/series/tmdb:${tmdbId}:3:3.json`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().streams).toHaveLength(1);
+    await app.close();
+  });
+
+  it('resolves a tvdb-sourced id with official order (AIOMetadata on a TVDB provider)', async () => {
+    const tvdbId = 468075;
+    const title = await pool.query(
+      `insert into titles (name_ru, tvdb_id) values ('Show', $1) returning id`,
+      [tvdbId],
+    );
+    const titleId = title.rows[0].id as string;
+    await pool.query(
+      `insert into torrents (hash, torbox_id, raw_name_at_ingest, last_seen)
+       values ('h4', 1004, 'Show', now())`,
+    );
+    const rule = await pool.query(
+      `insert into rules (torrent_hash, title_id, season, numbering, sort, start_episode, confidence, source)
+       values ('h4', $1, 3, 'sequential', 'natural', 1, 1.0, 'manual') returning id`,
+      [titleId],
+    );
+    const file = await pool.query(
+      `insert into files (torrent_hash, torbox_file_id, raw_path, size, is_video)
+       values ('h4', 1, '01.mp4', 100, true) returning id`,
+    );
+    await pool.query(
+      `insert into mappings (file_id, title_id, season, episode, rule_id) values ($1, $2, 3, 3, $3)`,
+      [file.rows[0].id, titleId, rule.rows[0].id],
+    );
+
+    const app = await build();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/${config.addonToken}/stream/series/tvdb:${tvdbId}:official:3:3.json`,
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().streams).toHaveLength(1);

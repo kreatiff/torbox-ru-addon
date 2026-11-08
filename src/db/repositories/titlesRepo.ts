@@ -56,6 +56,12 @@ export async function findByTmdbId(tmdbId: number): Promise<Title | null> {
   return row ? toTitle(titleRowSchema.parse(row)) : null;
 }
 
+export async function findByTvdbId(tvdbId: number): Promise<Title | null> {
+  const result = await pool.query('select * from titles where tvdb_id = $1', [tvdbId]);
+  const row = result.rows[0];
+  return row ? toTitle(titleRowSchema.parse(row)) : null;
+}
+
 export async function getTitleById(id: string): Promise<Title | null> {
   const result = await pool.query('select * from titles where id = $1', [id]);
   const row = result.rows[0];
