@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   findByImdbId,
   findByTmdbId,
+  findByTvdbId,
   getTitleById,
   setKinopoiskMetadata,
   type Title,
@@ -31,6 +32,13 @@ async function resolveTitleForMetaId(id: string): Promise<Title | null> {
   if (id.startsWith('tmdb:')) {
     const tmdbId = Number(id.slice('tmdb:'.length));
     return Number.isInteger(tmdbId) ? findByTmdbId(tmdbId) : null;
+  }
+  // Accepted for the same reason stream.ts takes `tvdb:` (see
+  // parseTvdbStreamId): once idPrefixes claims the scheme, clients send meta
+  // requests in it too, and issue #28 wants our Russian metadata to win.
+  if (id.startsWith('tvdb:')) {
+    const tvdbId = Number(id.slice('tvdb:'.length));
+    return Number.isInteger(tvdbId) ? findByTvdbId(tvdbId) : null;
   }
   if (id.startsWith(SYNTHETIC_PREFIX)) {
     const uuid = parseSyntheticId(id);

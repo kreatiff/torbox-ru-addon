@@ -14,7 +14,10 @@ import type { FastifyInstance } from 'fastify';
 // parseStreamId handles both id shapes. "torboxru:" is this addon's own
 // synthetic id scheme (issue #20, catalogMapper.ts) for a title with no
 // imdb_id -- Cinemeta can't render those, so they're browsable/playable
-// only via our own catalog/meta/stream routes.
+// only via our own catalog/meta/stream routes. "tvdb:" was added for the
+// same reason as "tmdb:": a real AIOStreams log showed a TVDB-provider
+// metadata addon sending `tvdb:<id>:official:<s>:<e>`, which was filtered
+// out client-side. Version bumped so cached manifests pick it up.
 //
 // `resources` is kept in short-form array + top-level `idPrefixes`, not the
 // per-resource object form, deliberately: the AIOStreams behaviour noted
@@ -31,11 +34,11 @@ export const CATALOG_ID = 'torbox-ru-library';
 
 const MANIFEST = {
   id: 'casa.dominus.torbox-ru',
-  version: '0.2.0',
+  version: '0.2.1',
   name: 'TorBox RU',
   resources: ['stream', 'catalog', 'meta'],
   types: ['series'],
-  idPrefixes: ['tt', 'tmdb:', 'torboxru:'],
+  idPrefixes: ['tt', 'tmdb:', 'tvdb:', 'torboxru:'],
   catalogs: [
     {
       type: 'series',
