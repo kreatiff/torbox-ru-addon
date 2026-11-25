@@ -51,6 +51,18 @@ export interface UpsertFeedEntryInput {
  * silently revert it back to NULL/whatever the matcher picks. raw_title is
  * refreshed unconditionally since a `[Обновлено]` re-poll changes the title
  * string itself.
+ *
+ * downloaded_at is cleared when <updated> moves forward. RuTracker releases
+ * that are still airing get new episodes appended to the *same topic*, which
+ * means a new .torrent with a new infohash -- so the torrent we already sent
+ * to TorBox is now a stale revision (1-5 серии while the topic has 1-6). The
+ * Download action is idempotent on downloaded_at, so without this reset it
+ * short-circuits forever and the new episode can never be fetched through
+ * the app. Clearing it re-arms the button (and the Feed tab's unactioned
+ * badge); the new revision then arrives as its own torrent/hash, and the
+ * old one stays held alongside it exactly like the "8 из 13" / "13 из 13"
+ * case in the spec. Strictly-greater, not "differs", so an out-of-order or
+ * repeated poll of the same revision can't re-arm it.
  */
 export async function upsertFeedEntry(input: UpsertFeedEntryInput): Promise<FeedEntryRecord> {
   const result = await pool.query(
@@ -59,6 +71,10 @@ export async function upsertFeedEntry(input: UpsertFeedEntryInput): Promise<Feed
      on conflict (topic_id) do update set
        title_id = coalesce(feed_entries.title_id, excluded.title_id),
        raw_title = excluded.raw_title,
+       downloaded_at = case
+         when excluded.last_updated > feed_entries.last_updated then null
+         else feed_entries.downloaded_at
+       end,
        last_updated = excluded.last_updated
      returning *`,
     [input.topicId, input.titleId, input.rawTitle, input.url, input.lastUpdated],

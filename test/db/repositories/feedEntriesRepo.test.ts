@@ -8,6 +8,7 @@ import {
   markNotified,
   listFeedEntries,
   setTitleId,
+  markDownloaded,
 } from '../../../src/db/repositories/feedEntriesRepo.js';
 
 async function insertTitle(nameRu: string): Promise<string> {
@@ -122,6 +123,43 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
     });
 
     expect(repolled.titleId).toBe(manualTitle);
+  });
+
+  it('re-arms the Download action when RuTracker updates the topic, but not on a same-revision re-poll', async () => {
+    // A still-airing release: downloaded as "1-5 серии", then the topic gets
+    // episode 6 appended (new infohash, newer <updated>).
+    await upsertFeedEntry({
+      topicId: 7,
+      titleId: null,
+      rawTitle: 'Ставка на любовь 3 сезон 1-5 серии',
+      url: 'https://rutracker.org/forum/viewtopic.php?t=7',
+      lastUpdated: new Date('2026-01-01T00:00:00Z'),
+    });
+    await markDownloaded(7);
+
+    // Same revision polled again (and an older one, out of order): stays downloaded.
+    for (const lastUpdated of [
+      new Date('2026-01-01T00:00:00Z'),
+      new Date('2025-12-31T00:00:00Z'),
+    ]) {
+      const repolled = await upsertFeedEntry({
+        topicId: 7,
+        titleId: null,
+        rawTitle: 'Ставка на любовь 3 сезон 1-5 серии',
+        url: 'https://rutracker.org/forum/viewtopic.php?t=7',
+        lastUpdated,
+      });
+      expect(repolled.downloadedAt).not.toBeNull();
+    }
+
+    const updated = await upsertFeedEntry({
+      topicId: 7,
+      titleId: null,
+      rawTitle: '[Обновлено] Ставка на любовь 3 сезон 1-6 серии',
+      url: 'https://rutracker.org/forum/viewtopic.php?t=7',
+      lastUpdated: new Date('2026-01-08T00:00:00Z'),
+    });
+    expect(updated.downloadedAt).toBeNull();
   });
 
   it('preserves first_seen across an on-conflict update', async () => {
