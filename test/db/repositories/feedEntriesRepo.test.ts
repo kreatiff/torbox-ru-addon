@@ -125,7 +125,7 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
     expect(repolled.titleId).toBe(manualTitle);
   });
 
-  it('re-arms the Download action when RuTracker updates the topic, but not on a same-revision re-poll', async () => {
+  it('re-arms the Download action and Discord notification when RuTracker updates the topic, but not on a same-revision re-poll', async () => {
     // A still-airing release: downloaded as "1-5 серии", then the topic gets
     // episode 6 appended (new infohash, newer <updated>).
     await upsertFeedEntry({
@@ -136,6 +136,7 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
       lastUpdated: new Date('2026-01-01T00:00:00Z'),
     });
     await markDownloaded(7);
+    await markNotified([7]);
 
     // Same revision polled again (and an older one, out of order): stays downloaded.
     for (const lastUpdated of [
@@ -150,6 +151,7 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
         lastUpdated,
       });
       expect(repolled.downloadedAt).not.toBeNull();
+      expect(repolled.notifiedAt).not.toBeNull();
     }
 
     const updated = await upsertFeedEntry({
@@ -160,6 +162,8 @@ describe.skipIf(!hasTestDb)('feedEntriesRepo', () => {
       lastUpdated: new Date('2026-01-08T00:00:00Z'),
     });
     expect(updated.downloadedAt).toBeNull();
+    expect(updated.notifiedAt).toBeNull();
+    expect((await listUnnotifiedEntries()).map((e) => e.topicId)).toContain(7);
   });
 
   it('preserves first_seen across an on-conflict update', async () => {

@@ -61,7 +61,10 @@ export interface UpsertFeedEntryInput {
  * the app. Clearing it re-arms the button (and the Feed tab's unactioned
  * badge); the new revision then arrives as its own torrent/hash, and the
  * old one stays held alongside it exactly like the "8 из 13" / "13 из 13"
- * case in the spec. Strictly-greater, not "differs", so an out-of-order or
+ * case in the spec. notified_at is cleared on the same condition so
+ * pollFeed's Discord step (which selects on notified_at is null) pings again
+ * with the updated title and a fresh download link; without it the only
+ * notification is for the very first revision. Strictly-greater, not "differs", so an out-of-order or
  * repeated poll of the same revision can't re-arm it.
  */
 export async function upsertFeedEntry(input: UpsertFeedEntryInput): Promise<FeedEntryRecord> {
@@ -74,6 +77,10 @@ export async function upsertFeedEntry(input: UpsertFeedEntryInput): Promise<Feed
        downloaded_at = case
          when excluded.last_updated > feed_entries.last_updated then null
          else feed_entries.downloaded_at
+       end,
+       notified_at = case
+         when excluded.last_updated > feed_entries.last_updated then null
+         else feed_entries.notified_at
        end,
        last_updated = excluded.last_updated
      returning *`,
